@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+dist/
+build/
+*.spec
+
+# Assets live on the device, not in git
+assets/sounds/*.mp3
+assets/sounds/*.wav
+assets/images/*.jpg
+assets/images/*.jpeg
+assets/images/*.png
+assets/videos/*.mp4
+assets/videos/*.avi
+assets/backgrounds/*.jpg
+assets/backgrounds/*.png
+assets/backgrounds/*.mp4
+assets/CollageCovers/*.png

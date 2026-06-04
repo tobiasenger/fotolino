@@ -1,0 +1,92 @@
+import logging
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+
+class StorageManager:
+    def __init__(self, config_manager):
+        self._cfg = config_manager
+
+    # ------------------------------------------------------------------
+
+    def _usb_dir(self, subdir: str) -> Path:
+        usb = self._cfg.usb_path()
+        if not usb.exists():
+            raise IOError(
+                f"USB-Stick nicht gefunden unter '{usb}'. "
+                "Bitte USB-Stick einstecken und sicherstellen, dass er unter "
+                f"'{usb}' eingehängt ist. "
+                "Mount prüfen: `lsblk` oder `df -h`"
+            )
+        path = usb / subdir
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise IOError(
+                f"Ordner '{path}' konnte nicht erstellt werden: {e}. "
+                "Bitte Schreibrechte und Dateisystem des USB-Sticks prüfen."
+            ) from e
+        return path
+
+    def _timestamp(self) -> str:
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # ------------------------------------------------------------------
+    # Photos
+    # ------------------------------------------------------------------
+
+    def save_photo(self, frame_rgb: np.ndarray, index: int) -> Path:
+        """Save a raw RGB numpy frame as JPEG. Returns the saved path."""
+        dest_dir  = self._usb_dir("Fotos")
+        filename  = f"foto_{self._timestamp()}_{index:02d}.jpg"
+        dest      = dest_dir / filename
+        try:
+            img = Image.fromarray(frame_rgb, "RGB")
+            img.save(dest, "JPEG", quality=95)
+            logger.info("Foto gespeichert: %s", dest)
+        except OSError as e:
+            raise IOError(
+                f"Foto konnte nicht gespeichert werden ({dest}): {e}. "
+                "Bitte USB-Stick auf freien Speicherplatz und Schreibrechte prüfen. "
+                f"Freier Speicher: {self.free_space_mb():.1f} MB"
+            ) from e
+        return dest
+
+    # ------------------------------------------------------------------
+    # Collages
+    # ------------------------------------------------------------------
+
+    def save_collage(self, collage_image: Image.Image) -> Path:
+        dest_dir = self._usb_dir("Collagen")
+        filename = f"collage_{self._timestamp()}.jpg"
+        dest     = dest_dir / filename
+        try:
+            collage_image.save(dest, "JPEG", quality=95)
+            logger.info("Collage gespeichert: %s", dest)
+        except OSError as e:
+            raise IOError(
+                f"Collage konnte nicht gespeichert werden ({dest}): {e}."
+            ) from e
+        return dest
+
+    # ------------------------------------------------------------------
+    # USB health check
+    # ------------------------------------------------------------------
+
+    def usb_available(self) -> bool:
+        usb = self._cfg.usb_path()
+        return usb.exists() and usb.is_dir()
+
+    def free_space_mb(self) -> float:
+        usb = self._cfg.usb_path()
+        try:
+            usage = shutil.disk_usage(usb)
+            return usage.free / (1024 * 1024)
+        except Exception:
+            return 0.0

@@ -1,0 +1,36 @@
+{
+  "gpio": {
+    "pin_start_button": 17,
+    "pin_admin_button": 27,
+    "pin_led_flash": 22,
+    "pin_led_ready": 23
+  },
+  "collage_covers": {
+    "1": "",
+    "2": "",
+    "3": "",
+    "4": ""
+  },
+  "idle_background": {
+    "type": "image",
+    "file": ""
+  },
+  "loading_bar_color": "#FF6600",
+  "flash_enabled": true,
+  "printer_name": "SELPHY",
+  "usb_mount": "/media/usb",
+  "screen_width": 1920,
+  "screen_height": 1080,
+  "fullscreen": true,
+  "system_sounds": {
+    "shutter_click": "assets/sounds/click.mp3",
+    "countdown_beep": ""
+  },
+  "capture_timing": {
+    "initial_preview_seconds": 2.0,
+    "countdown_from": 3,
+    "smile_duration": 0.8,
+    "post_photo_pause": 2.0,
+    "flash_duration": 0.15
+  }
+}
