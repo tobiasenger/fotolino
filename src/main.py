@@ -120,7 +120,9 @@ class App:
                     continue  # button events are handled centrally; don't also pass to screen
 
                 if event.type == SCREEN_TRANSITION:
-                    self._switch_screen(event.target)
+                    target = getattr(event, "target", None)
+                    if target:
+                        self._switch_screen(target)
                     continue
 
                 self._current_screen.handle_event(event)
