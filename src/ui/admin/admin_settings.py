@@ -1,12 +1,12 @@
 """
-Admin Settings tab – restructured into four clear groups:
-  ▸ Startscreen        – background type (image / video loop) + file browser
-  ▸ Collage-Overlays   – PNG upload per slot (1–4 photos) with file browser + size validation
-  ▸ Darstellung        – loading bar visibility and colour
-  ▸ Betrieb            – demo mode, flash LED, printer name, USB path
-  ▸ GPIO-Pins          – four pin numbers in a compact inline grid
+Admin Settings tab – tabbed layout grouped by category.
 
-All file pickers use the shared open_file_dialog helper (pygame_gui version-safe).
+Tabs:
+  Startscreen  – idle background (image / video loop)
+  Overlays     – PNG collage covers (1–4 photos)
+  Darstellung  – progress bar visibility + colour
+  Gerät        – demo mode, flash LED, printer, USB, GPIO pins
+  Sicherung    – export config (with custom name) + import
 """
 from __future__ import annotations
 from pathlib import Path
@@ -15,7 +15,7 @@ import pygame
 import pygame_gui
 from PIL import Image
 
-from ...constants import SCREEN_W, SCREEN_H, COLLAGE_W, COLLAGE_H
+from ...constants import SCREEN_W, SCREEN_H, ADMIN_PANEL, COLLAGE_W, COLLAGE_H
 from ..base_screen import get_font
 from .file_dialog import open_file_dialog
 
@@ -23,29 +23,31 @@ _PROJECT_ROOT = Path(__file__).parents[3]
 
 _TOP    = 70
 _MARGIN = 20
-_W      = SCREEN_W - 2 * _MARGIN   # full panel width
+_W      = SCREEN_W - 2 * _MARGIN
 _H      = SCREEN_H - _TOP - _MARGIN
 
-# Two-column split
-_L_X  = _MARGIN + 10          # left column x
-_L_W  = 860                   # left column width
-_R_X  = _L_X + _L_W + 30     # right column x
-_R_W  = _W - _L_W - 60       # right column width
+# ── Tab bar ────────────────────────────────────────────────────────────
+_TABS = ["Startscreen", "Overlays", "Darstellung", "Gerät", "Sicherung"]
+_TAB_H  = 40
+_TAB_Y  = _TOP + 6
+_TAB_W  = (_W - (_MARGIN + 10) * 2) // len(_TABS) - 4
+_CONT_Y = _TAB_Y + _TAB_H + 8   # content area top
+_CONT_X = _MARGIN + 10
+_CONT_W = _W - 20
+_SAVE_Y = SCREEN_H - 65          # global save button
 
-# File-entry widths (entry + browse button side by side)
+# ── Field widths ───────────────────────────────────────────────────────
 _BROWSE_W = 110
-_L_ENTRY  = _L_W - _BROWSE_W - 10  # entry width in left column
-_R_ENTRY  = min(420, _R_W - 20)    # entry width in right column (no browse)
-_PIN_W    = 80                       # GPIO pin entry width
+_ENTRY_W  = 600
+_ENTRY_WITH_BROWSE = _ENTRY_W - _BROWSE_W - 10
+_PIN_W    = 80
 
-# Allowed extensions per field type
+# ── Allowed file extensions ────────────────────────────────────────────
 _EXT = {
-    "image":      {".jpg", ".jpeg", ".png"},
-    "video":      {".mp4", ".avi", ".mov"},
-    "cover_png":  {".png"},
+    "image":     {".jpg", ".jpeg", ".png"},
+    "video":     {".mp4", ".avi", ".mov"},
+    "cover_png": {".png"},
 }
-
-# Asset subdirs for the file dialog start path
 _ASSET_DIR = {
     "image":     "assets/backgrounds",
     "video":     "assets/backgrounds",
@@ -53,21 +55,22 @@ _ASSET_DIR = {
 }
 
 
-def _section(text: str) -> str:
-    return f"▸  {text}"
-
-
 class AdminSettings:
     def __init__(self, app, manager: pygame_gui.UIManager):
-        self.app     = app
-        self._mgr    = manager
-        self._active = False
+        self.app      = app
+        self._mgr     = manager
+        self._active  = False
         self._widgets: list = []
         self._fields:  dict = {}
+
+        # Per-tab widget lists (for show/hide on tab switch)
+        self._tab_content: dict = {t: [] for t in _TABS}
+        self._tab_btns:    dict = {}
+        self._active_tab   = _TABS[0]
+
         self._status_msg = ""
         self._status_ok  = True
 
-        # File dialog state
         self._file_dialog             = None
         self._file_dialog_target: str | None = None
 
@@ -87,33 +90,39 @@ class AdminSettings:
         if not self._active:
             return
 
-        # File picked from dialog
         if event.type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
             self._on_file_picked(event.text)
             self._file_dialog = None
             self._file_dialog_target = None
             return
 
-        # Background type changed → update hint label text
         if event.type == pygame_gui.UI_DROP_DOWN_MENU_CHANGED:
             if event.ui_element == self._fields.get("bg_type"):
                 is_video = event.text == "Video-Loop"
-                lbl = self._fields.get("bg_file_hint")
-                if lbl:
-                    lbl.set_text("Videodatei (.mp4):" if is_video else "Bilddatei (.jpg / .png):")
-                return
+                hint = self._fields.get("bg_file_hint")
+                if hint:
+                    hint.set_text("Videodatei (.mp4):" if is_video else "Bilddatei (.jpg / .png):")
             return
 
         if event.type != pygame_gui.UI_BUTTON_PRESSED:
             return
         el = event.ui_element
 
+        # Tab switching
+        for tab_name, btn in self._tab_btns.items():
+            if el == btn:
+                self._switch_tab(tab_name)
+                return
+
+        # Save all settings
         if el == self._fields.get("save_btn"):
             self._save(); return
 
+        # Export
         if el == self._fields.get("export_btn"):
             self._export_config(); return
 
+        # Import
         if el == self._fields.get("import_btn"):
             dd = self._fields.get("import_dd")
             name = getattr(dd, "selected_option", None)
@@ -132,15 +141,30 @@ class AdminSettings:
     def draw(self, surface: pygame.Surface):
         if not self._active:
             return
-        # Status bar at bottom
+        pygame.draw.rect(surface, ADMIN_PANEL,
+                         (_MARGIN, _TAB_Y - 4, _W, _H - _TAB_Y + _TOP + 4), border_radius=8)
         if self._status_msg:
             color = (80, 210, 100) if self._status_ok else (220, 60, 60)
-            font  = get_font(24)
-            surf  = font.render(self._status_msg, True, color)
-            surface.blit(surf, (_MARGIN + 20, SCREEN_H - 48))
+            surf  = get_font(22).render(self._status_msg, True, color)
+            surface.blit(surf, (_CONT_X, SCREEN_H - 50))
 
     # ------------------------------------------------------------------
-    # Build UI
+    # Tab management
+    # ------------------------------------------------------------------
+
+    def _switch_tab(self, tab_name: str):
+        if tab_name == self._active_tab:
+            return
+        for w in self._tab_content.get(self._active_tab, []):
+            try: w.hide()
+            except Exception: pass
+        self._active_tab = tab_name
+        for w in self._tab_content.get(self._active_tab, []):
+            try: w.show()
+            except Exception: pass
+
+    # ------------------------------------------------------------------
+    # Build
     # ------------------------------------------------------------------
 
     def _kill_all(self):
@@ -149,189 +173,236 @@ class AdminSettings:
             except Exception: pass
         self._widgets.clear()
         self._fields.clear()
+        for k in _TABS:
+            self._tab_content[k] = []
+        self._tab_btns.clear()
         if self._file_dialog:
             try: self._file_dialog.kill()
             except Exception: pass
             self._file_dialog = None
 
+    def _reg(self, w, tab: str | None = None):
+        """Register a widget, optionally into a tab's content list."""
+        self._widgets.append(w)
+        if tab:
+            self._tab_content[tab].append(w)
+        return w
+
     def _build(self):
         self._kill_all()
         cfg = self.app.config.settings
 
-        # ── helpers ──────────────────────────────────────────────────────
+        # ── Tab buttons ────────────────────────────────────────────────
+        for i, tab in enumerate(_TABS):
+            btn = pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect(
+                    _CONT_X + i * (_TAB_W + 4), _TAB_Y, _TAB_W, _TAB_H
+                ),
+                text=tab, manager=self._mgr,
+            )
+            self._reg(btn)
+            self._tab_btns[tab] = btn
 
-        def reg(w):
-            self._widgets.append(w)
-            return w
-
-        def lbl(text, x, y, width=380, height=28):
-            return reg(pygame_gui.elements.UILabel(
-                relative_rect=pygame.Rect(x, y, width, height),
-                text=text, manager=self._mgr,
-            ))
-
-        def section_lbl(text, x, y, width=None):
-            w = width or (_L_W if x < _R_X else _R_W)
-            return reg(pygame_gui.elements.UILabel(
-                relative_rect=pygame.Rect(x, y, w, 34),
-                text=_section(text), manager=self._mgr,
-            ))
-
-        def entry(key, value, x, y, width=_R_ENTRY, height=40):
-            e = reg(pygame_gui.elements.UITextEntryLine(
-                relative_rect=pygame.Rect(x, y, width, height),
-                manager=self._mgr,
-            ))
-            e.set_text(str(value))
-            self._fields[key] = e
-            return e
-
-        def entry_with_browse(entry_key, browse_key, value, x, y):
-            e = reg(pygame_gui.elements.UITextEntryLine(
-                relative_rect=pygame.Rect(x, y, _L_ENTRY, 40),
-                manager=self._mgr,
-            ))
-            e.set_text(str(value))
-            self._fields[entry_key] = e
-            btn = reg(pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect(x + _L_ENTRY + 10, y, _BROWSE_W, 40),
-                text="📂 Suchen", manager=self._mgr,
-            ))
-            self._fields[f"browse_{browse_key}"] = btn
-            return e, btn
-
-        def dropdown(key, options, selected, x, y, width=220, height=44):
-            if selected not in options:
-                selected = options[0]
-            dd = reg(pygame_gui.elements.UIDropDownMenu(
-                options_list=options, starting_option=selected,
-                relative_rect=pygame.Rect(x, y, width, height),
-                manager=self._mgr,
-            ))
-            self._fields[key] = dd
-            return dd
-
-        covers    = cfg.get("collage_covers", {})
-        idle_bg   = cfg.get("idle_background", {})
-        gpio_pins = cfg.get("gpio", {})
-
-        # ══════════════════════════════════════════════════════════════════
-        # LEFT COLUMN
-        # ══════════════════════════════════════════════════════════════════
-        x, y = _L_X, _TOP + 14
-
-        # ── STARTSCREEN ──────────────────────────────────────────────────
-        section_lbl("STARTSCREEN", x, y); y += 42
-        lbl("Hintergrundtyp:", x, y, _L_W); y += 30
-        bg_type_val = "Video-Loop" if idle_bg.get("type") == "video" else "Bild (statisch)"
-        dropdown("bg_type", ["Bild (statisch)", "Video-Loop"], bg_type_val, x, y, 260); y += 52
-
-        is_bg_video = idle_bg.get("type") == "video"
-        bg_hint_text = "Videodatei (.mp4):" if is_bg_video else "Bilddatei (.jpg / .png):"
-        bg_hint = reg(pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(x, y, _L_W, 28),
-            text=bg_hint_text, manager=self._mgr,
+        # ── Global save button (always visible) ────────────────────────
+        save_btn = self._reg(pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(_CONT_X, _SAVE_Y, 300, 46),
+            text="Einstellungen speichern", manager=self._mgr,
         ))
-        self._fields["bg_file_hint"] = bg_hint; y += 30
-        entry_with_browse("bg_file", "bg_file", idle_bg.get("file", ""), x, y); y += 52
+        self._fields["save_btn"] = save_btn
 
-        y += 16  # gap between groups
+        # ── Tab content ────────────────────────────────────────────────
+        self._build_startscreen(cfg)
+        self._build_overlays(cfg)
+        self._build_darstellung(cfg)
+        self._build_geraet(cfg)
+        self._build_sicherung()
 
-        # ── COLLAGE-OVERLAYS ─────────────────────────────────────────────
-        section_lbl("COLLAGE-OVERLAYS  (PNG, 1800×1200 px)", x, y); y += 42
+        # Hide all tabs except the active one
+        for tab in _TABS:
+            if tab != self._active_tab:
+                for w in self._tab_content[tab]:
+                    try: w.hide()
+                    except Exception: pass
+
+    # ── helpers shared by tab builders ────────────────────────────────
+
+    def _lbl(self, text: str, x: int, y: int, tab: str, width: int = 560, height: int = 28):
+        return self._reg(pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect(x, y, width, height),
+            text=text, manager=self._mgr,
+        ), tab)
+
+    def _entry(self, key: str, value, x: int, y: int, tab: str, width: int = _ENTRY_W):
+        e = self._reg(pygame_gui.elements.UITextEntryLine(
+            relative_rect=pygame.Rect(x, y, width, 40),
+            manager=self._mgr,
+        ), tab)
+        e.set_text(str(value))
+        self._fields[key] = e
+        return e
+
+    def _entry_browse(self, entry_key: str, browse_key: str, value: str,
+                      x: int, y: int, tab: str):
+        e = self._reg(pygame_gui.elements.UITextEntryLine(
+            relative_rect=pygame.Rect(x, y, _ENTRY_WITH_BROWSE, 40),
+            manager=self._mgr,
+        ), tab)
+        e.set_text(str(value))
+        self._fields[entry_key] = e
+        btn = self._reg(pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(x + _ENTRY_WITH_BROWSE + 10, y, _BROWSE_W, 40),
+            text="📂 Suchen", manager=self._mgr,
+        ), tab)
+        self._fields[f"browse_{browse_key}"] = btn
+        return e, btn
+
+    def _dropdown(self, key: str, options: list, selected: str,
+                  x: int, y: int, tab: str, width: int = 220):
+        if selected not in options:
+            selected = options[0]
+        dd = self._reg(pygame_gui.elements.UIDropDownMenu(
+            options_list=options, starting_option=selected,
+            relative_rect=pygame.Rect(x, y, width, 44),
+            manager=self._mgr,
+        ), tab)
+        self._fields[key] = dd
+        return dd
+
+    # ------------------------------------------------------------------
+    # Tab: Startscreen
+    # ------------------------------------------------------------------
+
+    def _build_startscreen(self, cfg: dict):
+        tab    = "Startscreen"
+        idle   = cfg.get("idle_background", {})
+        x, y   = _CONT_X, _CONT_Y
+
+        self._lbl("Hintergrundtyp:", x, y, tab, _ENTRY_W); y += 30
+        bg_type_val = "Video-Loop" if idle.get("type") == "video" else "Bild (statisch)"
+        self._dropdown("bg_type", ["Bild (statisch)", "Video-Loop"], bg_type_val, x, y, tab, 280)
+        y += 52
+
+        is_video   = idle.get("type") == "video"
+        hint_text  = "Videodatei (.mp4):" if is_video else "Bilddatei (.jpg / .png):"
+        hint = self._reg(pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect(x, y, _ENTRY_W, 28),
+            text=hint_text, manager=self._mgr,
+        ), tab)
+        self._fields["bg_file_hint"] = hint; y += 30
+        self._entry_browse("bg_file", "bg_file", idle.get("file", ""), x, y, tab); y += 52
+
+    # ------------------------------------------------------------------
+    # Tab: Overlays
+    # ------------------------------------------------------------------
+
+    def _build_overlays(self, cfg: dict):
+        tab    = "Overlays"
+        covers = cfg.get("collage_covers", {})
+        x, y   = _CONT_X, _CONT_Y
+
+        self._lbl("Collage-Overlays (PNG, 1800×1200 px) – ein Cover pro Foto-Anzahl:",
+                  x, y, tab, _CONT_W); y += 34
+
         for n in range(1, 5):
             plural = "Foto" if n == 1 else "Fotos"
-            lbl(f"{n} {plural}:", x, y, _L_W); y += 28
-            cur = covers.get(str(n), "")
-            entry_with_browse(f"cover_{n}", f"cover_{n}", cur, x, y); y += 50
+            self._lbl(f"{n} {plural}:", x, y, tab, _ENTRY_W); y += 28
+            self._entry_browse(f"cover_{n}", f"cover_{n}", covers.get(str(n), ""), x, y, tab)
+            y += 50
 
-        # ══════════════════════════════════════════════════════════════════
-        # RIGHT COLUMN
-        # ══════════════════════════════════════════════════════════════════
-        x, y = _R_X, _TOP + 14
+    # ------------------------------------------------------------------
+    # Tab: Darstellung
+    # ------------------------------------------------------------------
 
-        # ── DARSTELLUNG ──────────────────────────────────────────────────
-        section_lbl("DARSTELLUNG", x, y, _R_W); y += 42
-        lbl("Ladebalken anzeigen:", x, y, _R_W); y += 28
-        dropdown("progress_bar_enabled",
-                 ["Ja", "Nein"],
-                 "Ja" if cfg.get("progress_bar_enabled", True) else "Nein",
-                 x, y, 200); y += 52
-        lbl("Ladebalken-Farbe (Hex):", x, y, _R_W); y += 28
-        entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"), x, y, 200); y += 52
+    def _build_darstellung(self, cfg: dict):
+        tab  = "Darstellung"
+        x, y = _CONT_X, _CONT_Y
 
-        y += 16  # gap
+        self._lbl("Ladebalken anzeigen:", x, y, tab, 360); y += 30
+        self._dropdown("progress_bar_enabled",
+                       ["Ja", "Nein"],
+                       "Ja" if cfg.get("progress_bar_enabled", True) else "Nein",
+                       x, y, tab, 200)
+        y += 52
+        self._lbl("Ladebalken-Farbe (Hex, z. B. #FF6600):", x, y, tab, 400); y += 30
+        self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"),
+                    x, y, tab, 200)
 
-        # ── BETRIEB ──────────────────────────────────────────────────────
-        section_lbl("BETRIEB", x, y, _R_W); y += 42
-        lbl("Demo-Modus (Druck simuliert):", x, y, _R_W); y += 28
-        dropdown("demo_mode",
-                 ["Aus", "Ein"],
-                 "Ein" if cfg.get("demo_mode", False) else "Aus",
-                 x, y, 200); y += 52
-        lbl("Blitz-LED aktiv:", x, y, _R_W); y += 28
-        dropdown("flash_enabled",
-                 ["Ja", "Nein"],
-                 "Ja" if cfg.get("flash_enabled", True) else "Nein",
-                 x, y, 200); y += 52
-        lbl("CUPS-Druckername:", x, y, _R_W); y += 28
-        entry("printer_name", cfg.get("printer_name", "SELPHY"), x, y, _R_ENTRY); y += 52
-        lbl("USB-Mount-Pfad:", x, y, _R_W); y += 28
-        entry("usb_mount", cfg.get("usb_mount", "/media/usb"), x, y, _R_ENTRY); y += 52
+    # ------------------------------------------------------------------
+    # Tab: Gerät
+    # ------------------------------------------------------------------
 
-        y += 16  # gap
+    def _build_geraet(self, cfg: dict):
+        tab      = "Gerät"
+        gpio     = cfg.get("gpio", {})
+        x, y     = _CONT_X, _CONT_Y
+        col2_x   = x + 640
 
-        # ── GPIO-PINS ────────────────────────────────────────────────────
-        section_lbl("GPIO-PINS", x, y, _R_W); y += 42
+        # Left side: demo, flash, printer, USB
+        self._lbl("Demo-Modus (Druck simuliert):", x, y, tab, 580); y += 30
+        self._dropdown("demo_mode", ["Aus", "Ein"],
+                       "Ein" if cfg.get("demo_mode", False) else "Aus",
+                       x, y, tab, 200); y += 52
 
+        self._lbl("Blitz-LED aktiv:", x, y, tab, 580); y += 30
+        self._dropdown("flash_enabled", ["Ja", "Nein"],
+                       "Ja" if cfg.get("flash_enabled", True) else "Nein",
+                       x, y, tab, 200); y += 52
+
+        self._lbl("CUPS-Druckername:", x, y, tab, 580); y += 30
+        self._entry("printer_name", cfg.get("printer_name", "SELPHY"), x, y, tab, 320); y += 52
+
+        self._lbl("USB-Mount-Pfad:", x, y, tab, 580); y += 30
+        self._entry("usb_mount", cfg.get("usb_mount", "/media/usb"), x, y, tab, 380)
+
+        # Right side: GPIO pins (2×2 grid)
+        gy = _CONT_Y
         pin_pairs = [
             ("pin_start_button", "Start-Button"),
             ("pin_admin_button", "Admin-Button"),
             ("pin_led_flash",    "Flash-LED"),
             ("pin_led_ready",    "Ready-LED"),
         ]
-        col_w  = _R_W // 2
-        pin_y  = y
+        self._lbl("GPIO-Pins:", col2_x, gy, tab, 400); gy += 34
+        col_w = 280
         for i, (key, label_text) in enumerate(pin_pairs):
-            px = x + (i % 2) * col_w
-            py = pin_y + (i // 2) * 76
-            lbl(f"{label_text}:", px, py, col_w - _PIN_W - 10);
-            entry(f"gpio_{key}", gpio_pins.get(key, 0), px, py + 28, _PIN_W)
-        y = pin_y + 2 * 76 + 10
+            px = col2_x + (i % 2) * col_w
+            py = gy + (i // 2) * 72
+            self._lbl(f"{label_text}:", px, py, tab, col_w - _PIN_W - 10)
+            self._entry(f"gpio_{key}", gpio.get(key, 0), px, py + 28, tab, _PIN_W)
 
-        y += 20
+    # ------------------------------------------------------------------
+    # Tab: Sicherung
+    # ------------------------------------------------------------------
 
-        # ── SAVE BUTTON ──────────────────────────────────────────────────
-        save = reg(pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x, y, 280, 50),
-            text="Einstellungen speichern", manager=self._mgr,
-        ))
-        self._fields["save_btn"] = save
-        y += 70
+    def _build_sicherung(self):
+        tab  = "Sicherung"
+        x, y = _CONT_X, _CONT_Y
 
-        # ── KONFIGURATION ─────────────────────────────────────────────────
-        section_lbl("KONFIGURATION", x, y, _R_W); y += 42
-        lbl("Einstellungen, Szenen und Pfade sichern:", x, y, _R_W); y += 30
-        export_btn = reg(pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x, y, 260, 44),
+        # Export section
+        self._lbl("Konfiguration sichern (Einstellungen + Szenen + Pfade):",
+                  x, y, tab, _CONT_W); y += 34
+        self._lbl("Name für den Export:", x, y, tab, 300); y += 30
+        self._entry("export_name", "", x, y, tab, 440); y += 52
+        export_btn = self._reg(pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(x, y, 220, 44),
             text="📤  Exportieren", manager=self._mgr,
-        ))
-        self._fields["export_btn"] = export_btn
-        y += 56
+        ), tab)
+        self._fields["export_btn"] = export_btn; y += 70
 
-        lbl("Gespeicherte Konfiguration wiederherstellen:", x, y, _R_W); y += 30
-        configs      = self._get_available_configs()
-        import_dd_w  = _R_W - 200
-        import_dd = reg(pygame_gui.elements.UIDropDownMenu(
+        # Import section
+        self._lbl("Gespeicherte Konfiguration wiederherstellen:", x, y, tab, _CONT_W); y += 34
+        configs    = self._get_available_configs()
+        dd_w       = min(500, _CONT_W - 220)
+        import_dd  = self._reg(pygame_gui.elements.UIDropDownMenu(
             options_list=configs, starting_option=configs[0],
-            relative_rect=pygame.Rect(x, y, import_dd_w, 44),
+            relative_rect=pygame.Rect(x, y, dd_w, 44),
             manager=self._mgr,
-        ))
+        ), tab)
         self._fields["import_dd"] = import_dd
-        import_btn = reg(pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x + import_dd_w + 10, y + 2, 180, 40),
+        import_btn = self._reg(pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(x + dd_w + 10, y + 2, 200, 40),
             text="📥  Importieren", manager=self._mgr,
-        ))
+        ), tab)
         self._fields["import_btn"] = import_btn
 
     # ------------------------------------------------------------------
@@ -347,10 +418,9 @@ class AdminSettings:
         self._file_dialog_target = target
 
         if target == "bg_file":
-            # Type depends on the dropdown selection
-            bg_dd = self._fields.get("bg_type")
+            bg_dd    = self._fields.get("bg_type")
             is_video = hasattr(bg_dd, "selected_option") and bg_dd.selected_option == "Video-Loop"
-            ftype = "video" if is_video else "image"
+            ftype    = "video" if is_video else "image"
         elif target.startswith("cover_"):
             ftype = "cover_png"
         else:
@@ -388,10 +458,6 @@ class AdminSettings:
             w.set_text(rel)
 
     # ------------------------------------------------------------------
-    # Save
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
     # Config export / import
     # ------------------------------------------------------------------
 
@@ -406,9 +472,19 @@ class AdminSettings:
     def _export_config(self):
         import shutil
         from datetime import datetime
-        timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_dir = _PROJECT_ROOT / "assets" / "konfigurationen" / f"export_{timestamp}"
+
+        # Use custom name from text entry, fall back to timestamp
+        name_entry = self._fields.get("export_name")
+        custom_name = ""
+        if isinstance(name_entry, pygame_gui.elements.UITextEntryLine):
+            raw = name_entry.get_text().strip()
+            # Sanitise: remove characters invalid in directory names
+            custom_name = "".join(c if c not in r'\/:*?"<>|' else "_" for c in raw)
+
+        folder_name = custom_name or datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_dir  = _PROJECT_ROOT / "assets" / "konfigurationen" / folder_name
         export_dir.mkdir(parents=True, exist_ok=True)
+
         config_dir = _PROJECT_ROOT / "config"
         copied = []
         for fname in ("settings.json", "scenes.json", "paths.json"):
@@ -416,8 +492,9 @@ class AdminSettings:
             if src.exists():
                 shutil.copy2(src, export_dir / fname)
                 copied.append(fname)
+
         if copied:
-            self._status_msg = f"Exportiert nach konfigurationen/export_{timestamp}"
+            self._status_msg = f"Exportiert als '{folder_name}'"
             self._status_ok  = True
             import logging
             logging.getLogger(__name__).info("Config exported to %s", export_dir)
@@ -425,38 +502,58 @@ class AdminSettings:
             self._status_msg = "Export fehlgeschlagen – keine Konfigurationsdateien gefunden."
             self._status_ok  = False
 
+        # Rebuild Sicherung tab so the import dropdown shows the new entry
+        for w in self._tab_content.get("Sicherung", []):
+            try: w.kill()
+            except Exception: pass
+        self._tab_content["Sicherung"] = []
+        for key in ("export_btn", "import_dd", "import_btn", "export_name"):
+            self._fields.pop(key, None)
+        self._build_sicherung()
+        if self._active_tab != "Sicherung":
+            for w in self._tab_content["Sicherung"]:
+                try: w.hide()
+                except Exception: pass
+
     def _import_config(self, config_name: str):
         import shutil
         if config_name in ("(keine vorhanden)", ""):
             self._status_msg = "Keine Konfiguration ausgewählt."
             self._status_ok  = False
             return
+
         src_dir    = _PROJECT_ROOT / "assets" / "konfigurationen" / config_name
         config_dir = _PROJECT_ROOT / "config"
+
         if not src_dir.exists():
             self._status_msg = f"Ordner nicht gefunden: {config_name}"
             self._status_ok  = False
             return
+
         imported = []
         for fname in ("settings.json", "scenes.json", "paths.json"):
             src = src_dir / fname
             if src.exists():
                 shutil.copy2(src, config_dir / fname)
                 imported.append(fname)
+
         if not imported:
             self._status_msg = f"Keine Dateien in '{config_name}' gefunden."
             self._status_ok  = False
             return
-        # Reload live config and rebuild this panel to reflect new settings
+
         self.app.config.reload()
-        self._status_msg = f"Importiert aus '{config_name}': {', '.join(imported)}"
+        self._status_msg = f"Importiert: '{config_name}'"
         self._status_ok  = True
         import logging
         logging.getLogger(__name__).info("Config imported from %s", src_dir)
-        # Rebuild panel so all fields show the newly imported values
+
+        # Rebuild the whole panel to reflect new settings
         self.hide()
         self.show()
 
+    # ------------------------------------------------------------------
+    # Save
     # ------------------------------------------------------------------
 
     def _save(self):
@@ -479,11 +576,11 @@ class AdminSettings:
         # Background
         bg_type_sel = get_dd("bg_type")
         cfg["idle_background"] = {
-            "type":  "video" if bg_type_sel == "Video-Loop" else "image",
-            "file":  get_text("bg_file") or "",
+            "type": "video" if bg_type_sel == "Video-Loop" else "image",
+            "file": get_text("bg_file") or "",
         }
 
-        # Collage covers – validate PNG size
+        # Collage covers – validate PNG size and existence
         covers = cfg.setdefault("collage_covers", {})
         errors = []
         for n in range(1, 5):
@@ -508,15 +605,15 @@ class AdminSettings:
 
         # Display settings
         bar_sel = get_dd("progress_bar_enabled")
-        if bar_sel:
+        if bar_sel is not None:
             cfg["progress_bar_enabled"] = bar_sel == "Ja"
         cfg["loading_bar_color"] = get_text("loading_bar_color") or "#FF6600"
 
         # Operation
         demo_sel  = get_dd("demo_mode")
         flash_sel = get_dd("flash_enabled")
-        if demo_sel:  cfg["demo_mode"]     = demo_sel  == "Ein"
-        if flash_sel: cfg["flash_enabled"] = flash_sel == "Ja"
+        if demo_sel  is not None: cfg["demo_mode"]     = demo_sel  == "Ein"
+        if flash_sel is not None: cfg["flash_enabled"] = flash_sel == "Ja"
         cfg["printer_name"] = get_text("printer_name") or "SELPHY"
         cfg["usb_mount"]    = get_text("usb_mount")    or "/media/usb"
 

@@ -90,6 +90,7 @@ class AdminScenes:
         self._browse_audio: pygame_gui.elements.UIButton | None = None
         self._browse_video: pygame_gui.elements.UIButton | None = None
         self._e_duration   = None
+        self._is_photo     = True   # tracks current media type selection
 
         self._error_msg = ""
 
@@ -147,8 +148,9 @@ class AdminScenes:
 
         # ── Media type dropdown changed → toggle field visibility ───────
         if event.type == pygame_gui.UI_DROP_DOWN_MENU_CHANGED:
-            if hasattr(self, "_e_media") and event.ui_element == self._e_media:
-                self._update_media_visibility(event.text == "Foto + Ton")
+            if self._e_media and event.ui_element == self._e_media:
+                self._is_photo = (event.text == "Foto + Ton")
+                self._update_media_visibility(self._is_photo)
                 return
 
         if event.type != pygame_gui.UI_BUTTON_PRESSED:
@@ -384,6 +386,7 @@ class AdminScenes:
 
         lbl("Medientyp:", y);  y += 30
         is_photo = scene.get("media_type", "photo") == "photo"
+        self._is_photo = is_photo   # initialise tracked state
         self._e_media = dropdown(["Foto + Ton", "Video"],
                                  "Foto + Ton" if is_photo else "Video", y);  y += 54
 
@@ -531,8 +534,7 @@ class AdminScenes:
 
         # Scene type is always the active tab – no dropdown involved
         scene_type = self._active_type
-        media_text = getattr(self._e_media, "selected_option", "")
-        is_photo   = media_text == "Foto + Ton"
+        is_photo   = self._is_photo   # set in _open_editor and updated on dropdown change
         name       = self._e_name.get_text().strip()  if self._e_name  else ""
         image      = self._e_image.get_text().strip()  if self._e_image else ""
         audio      = self._e_audio.get_text().strip()  if self._e_audio else ""

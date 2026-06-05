@@ -1,6 +1,10 @@
 """
 Admin Paths tab.
-List of paths with probability display; create / edit / delete via inline editor panel.
+Dynamic form: greeting scene (required) + photo count (0–4).
+When count = 0, only greeting is played (no collage/print).
+When count ≥ 1, collage and print scene fields appear and are mandatory.
+Selections are tracked in instance variables so no reliance on
+UIDropDownMenu.selected_option being available before a change event.
 """
 from __future__ import annotations
 
@@ -8,31 +12,69 @@ import pygame
 import pygame_gui
 
 from ...constants import (
-    SCREEN_W, SCREEN_H, ADMIN_BG, ADMIN_PANEL, ADMIN_HIGHLIGHT,
-    COLOR_TEXT, COLOR_TEXT_DIM, COLOR_ACCENT,
+    SCREEN_W, SCREEN_H, ADMIN_PANEL,
 )
 
-_TOP    = 70       # below tab bar
-_MARGIN = 20
-_LIST_W = 440
-_PANEL_X = _LIST_W + _MARGIN * 2
-_PANEL_W = SCREEN_W - _PANEL_X - _MARGIN
+_TOP       = 70
+_MARGIN    = 20
+_LIST_W    = 440
+_PANEL_X   = _LIST_W + _MARGIN * 2
+_PANEL_W   = SCREEN_W - _PANEL_X - _MARGIN
 _CONTENT_H = SCREEN_H - _TOP - _MARGIN
+
+# Sentinel shown when no scene has been chosen yet
+_NONE = "(Auswählen…)"
+
+_COUNT_OPTIONS = [
+    "0 – Nur Begrüßung",
+    "1 Foto",
+    "2 Fotos",
+    "3 Fotos",
+    "4 Fotos",
+]
+
+
+def _count_from_label(text: str) -> int:
+    try:
+        return int(text[0])
+    except (ValueError, IndexError):
+        return 0
 
 
 class AdminPaths:
     def __init__(self, app, manager: pygame_gui.UIManager):
         self.app     = app
         self._mgr    = manager
-        self._widgets: list = []
         self._active = False
 
-        # Editor state
+        self._widgets:       list = []
+        self._editor_widgets: list = []
+        self._path_buttons:   dict = {}   # path_id -> (edit_btn, del_btn)
         self._editing_id: str | None = None
-        self._editor_widgets: list   = []
 
-        # Scrollable path list state
-        self._path_buttons: dict = {}  # path_id -> (edit_btn, del_btn)
+        # Name → scene_id mappings for each dropdown (populated in _open_editor)
+        self._greeting_opts: dict = {}
+        self._collage_opts:  dict = {}
+        self._print_opts:    dict = {}
+
+        # Currently selected labels (updated on UI_DROP_DOWN_MENU_CHANGED)
+        self._sel_greeting = _NONE
+        self._sel_collage  = _NONE
+        self._sel_print    = _NONE
+        self._sel_count    = _COUNT_OPTIONS[0]
+
+        # Widgets that are shown/hidden based on capture count
+        self._photo_detail_widgets: list = []
+
+        # Editor widget refs
+        self._e_name:     pygame_gui.elements.UITextEntryLine | None = None
+        self._e_prob:     pygame_gui.elements.UITextEntryLine | None = None
+        self._e_greeting: pygame_gui.elements.UIDropDownMenu | None = None
+        self._e_capture:  pygame_gui.elements.UIDropDownMenu | None = None
+        self._e_collage:  pygame_gui.elements.UIDropDownMenu | None = None
+        self._e_print:    pygame_gui.elements.UIDropDownMenu | None = None
+        self._save_btn:   pygame_gui.elements.UIButton | None = None
+        self._cancel_btn: pygame_gui.elements.UIButton | None = None
 
     # ------------------------------------------------------------------
 
@@ -48,6 +90,22 @@ class AdminPaths:
     def handle_event(self, event: pygame.event.Event):
         if not self._active:
             return
+
+        # Track dropdown selections so _save_editor can read them reliably
+        # regardless of pygame_gui version behaviour with selected_option.
+        if event.type == pygame_gui.UI_DROP_DOWN_MENU_CHANGED:
+            el = event.ui_element
+            if self._e_capture and el == self._e_capture:
+                self._sel_count = event.text
+                self._update_count_visibility()
+            elif self._e_greeting and el == self._e_greeting:
+                self._sel_greeting = event.text
+            elif self._e_collage and el == self._e_collage:
+                self._sel_collage = event.text
+            elif self._e_print and el == self._e_print:
+                self._sel_print = event.text
+            return
+
         if event.type != pygame_gui.UI_BUTTON_PRESSED:
             return
         el = event.ui_element
@@ -68,9 +126,9 @@ class AdminPaths:
                 self._clear_editor()
                 return
 
-        if hasattr(self, "_save_btn") and el == self._save_btn:
+        if self._save_btn and el == self._save_btn:
             self._save_editor()
-        elif hasattr(self, "_cancel_btn") and el == self._cancel_btn:
+        elif self._cancel_btn and el == self._cancel_btn:
             self._clear_editor()
 
     def update(self, dt: float):
@@ -79,15 +137,11 @@ class AdminPaths:
     def draw(self, surface: pygame.Surface):
         if not self._active:
             return
-        # List panel background
         pygame.draw.rect(surface, ADMIN_PANEL,
                          (_MARGIN, _TOP, _LIST_W, _CONTENT_H), border_radius=8)
-        # Editor panel background
-        if self._editing_id is not None or hasattr(self, "_new_mode"):
+        if self._editing_id is not None:
             pygame.draw.rect(surface, ADMIN_PANEL,
                              (_PANEL_X, _TOP, _PANEL_W, _CONTENT_H), border_radius=8)
-
-        self._draw_path_cards(surface)
 
     # ------------------------------------------------------------------
 
@@ -109,17 +163,20 @@ class AdminPaths:
             try: w.kill()
             except Exception: pass
         self._editor_widgets.clear()
+        self._photo_detail_widgets.clear()
+        self._e_name = self._e_prob = self._e_greeting = None
+        self._e_capture = self._e_collage = self._e_print = None
+        self._save_btn = self._cancel_btn = None
 
     def _clear_editor(self):
         self._kill_editor()
         self._editing_id = None
-        if hasattr(self, "_new_mode"):
-            del self._new_mode
 
+    # ------------------------------------------------------------------
+    # List
     # ------------------------------------------------------------------
 
     def _build_list(self):
-        # Kill old list widgets
         for ebtn, dbtn in self._path_buttons.values():
             try: ebtn.kill()
             except Exception: pass
@@ -131,7 +188,6 @@ class AdminPaths:
             except Exception: pass
         self._widgets.clear()
 
-        # Add button
         self._add_btn = pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect(_MARGIN + _LIST_W - 160, _TOP + 10, 150, 40),
             text="+ Neuer Pfad",
@@ -142,31 +198,26 @@ class AdminPaths:
         paths = self.app.config.get_paths()
         y = _TOP + 60
         for path in paths:
-            pid  = path["id"]
-            name = path.get("name", "(kein Name)")
-            prob = (self.app.config.compute_default_probability()
-                    if path.get("is_default") else path.get("probability", 0))
-            default_tag = " ★" if path.get("is_default") else ""
+            pid     = path["id"]
+            name    = path.get("name", "(kein Name)")
+            prob    = (self.app.config.compute_default_probability()
+                       if path.get("is_default") else path.get("probability", 0))
+            dtag    = " ★" if path.get("is_default") else ""
             capture = path.get("scenes", {}).get("capture_count", 0)
-            label = f"{name}{default_tag}  |  {prob}%  |  {capture} Fotos"
+            label   = f"{name}{dtag}  |  {prob}%  |  {capture} Fotos"
 
             edit_btn = pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect(_MARGIN + 4, y, _LIST_W - 100, 44),
-                text=label,
-                manager=self._mgr,
+                text=label, manager=self._mgr,
             )
             del_btn = pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect(_MARGIN + _LIST_W - 88, y, 80, 44),
-                text="Löschen",
-                manager=self._mgr,
+                text="Löschen", manager=self._mgr,
             )
             self._path_buttons[pid] = (edit_btn, del_btn)
             y += 52
             if y + 52 > _TOP + _CONTENT_H:
                 break
-
-    def _draw_path_cards(self, surface: pygame.Surface):
-        pass  # Buttons are drawn by pygame_gui; nothing extra needed here
 
     # ------------------------------------------------------------------
     # Editor
@@ -174,110 +225,121 @@ class AdminPaths:
 
     def _open_editor(self, path: dict | None):
         self._clear_editor()
-        self._new_mode = path is None
         self._editing_id = path["id"] if path else "__new__"
 
         x0 = _PANEL_X + 20
         y  = _TOP + 20
         w  = _PANEL_W - 40
 
-        def label(text, yy):
-            lbl = pygame_gui.elements.UILabel(
-                relative_rect=pygame.Rect(x0, yy, w, 30),
+        def reg(widget):
+            self._editor_widgets.append(widget)
+            return widget
+
+        def lbl(text, yy, height=28):
+            return reg(pygame_gui.elements.UILabel(
+                relative_rect=pygame.Rect(x0, yy, w, height),
                 text=text, manager=self._mgr,
-            )
-            self._editor_widgets.append(lbl)
-            return lbl
+            ))
 
-        def text_entry(initial, yy):
-            entry = pygame_gui.elements.UITextEntryLine(
-                relative_rect=pygame.Rect(x0, yy, w, 40),
+        def entry(initial, yy, width=None):
+            e = reg(pygame_gui.elements.UITextEntryLine(
+                relative_rect=pygame.Rect(x0, yy, width or w, 40),
                 manager=self._mgr,
-            )
-            entry.set_text(initial)
-            self._editor_widgets.append(entry)
-            return entry
+            ))
+            e.set_text(str(initial))
+            return e
 
-        def dropdown(options, selected, yy):
+        def ddmenu(options: list, sel: str, yy: int):
             if not options:
-                options = ["(keine verfügbar)"]
-                selected = options[0]
-            if selected not in options:
-                selected = options[0]
-            dd = pygame_gui.elements.UIDropDownMenu(
-                options_list=options,
-                starting_option=selected,
+                options = [_NONE]
+            if sel not in options:
+                sel = options[0]
+            return reg(pygame_gui.elements.UIDropDownMenu(
+                options_list=options, starting_option=sel,
                 relative_rect=pygame.Rect(x0, yy, w, 44),
                 manager=self._mgr,
-            )
-            self._editor_widgets.append(dd)
-            return dd
+            ))
 
-        label("Name:", y);                 y += 32
-        self._e_name = text_entry(path.get("name", "") if path else "", y); y += 50
+        # ── Build name→id maps ──────────────────────────────────────────
+        def _build_map(scene_type: str) -> dict:
+            m = {_NONE: ""}
+            for s in self.app.config.get_scenes_by_type(scene_type):
+                m[s.get("name", s["id"])] = s["id"]
+            return m
 
-        if not (path and path.get("is_default")):
-            label("Wahrscheinlichkeit (%):", y);  y += 32
-            self._e_prob = text_entry(str(path.get("probability", 5)) if path else "5", y); y += 50
-        else:
+        self._greeting_opts = _build_map("greeting")
+        self._collage_opts  = _build_map("collage")
+        self._print_opts    = _build_map("print")
+
+        def _find_label(opts: dict, scene_id: str) -> str:
+            return next((lbl for lbl, sid in opts.items()
+                         if sid == scene_id and lbl != _NONE), _NONE)
+
+        scenes_cfg = path.get("scenes", {}) if path else {}
+        self._sel_greeting = _find_label(self._greeting_opts, scenes_cfg.get("greeting", ""))
+        self._sel_collage  = _find_label(self._collage_opts,  scenes_cfg.get("collage",  ""))
+        self._sel_print    = _find_label(self._print_opts,    scenes_cfg.get("print",    ""))
+        cur_count          = scenes_cfg.get("capture_count", 0)
+        self._sel_count    = _COUNT_OPTIONS[min(cur_count, 4)]
+
+        # ── Fixed fields ────────────────────────────────────────────────
+        lbl("Name:", y);  y += 30
+        self._e_name = entry(path.get("name", "") if path else "", y);  y += 50
+
+        if path and path.get("is_default"):
+            lbl(f"★ Standard-Pfad  –  Wahrscheinlichkeit: "
+                f"{self.app.config.compute_default_probability()}%", y, 36)
+            y += 44
             self._e_prob = None
-            label(f"Standard-Pfad – Wahrscheinlichkeit: {self.app.config.compute_default_probability()}%", y)
-            y += 40
+        else:
+            lbl("Wahrscheinlichkeit (%):", y);  y += 30
+            self._e_prob = entry(str(path.get("probability", 5)) if path else "5", y, 120)
+            y += 50
 
-        # Greeting scene
-        greeting_scenes = [(s["id"], s.get("name", s["id"]))
-                           for s in self.app.config.get_scenes_by_type("greeting")]
-        g_options = [f"{n} [{i}]" for i, n in greeting_scenes]
-        cur_greeting = path.get("scenes", {}).get("greeting", "") if path else ""
-        g_sel = next((f"{n} [{i}]" for i, n in greeting_scenes if i == cur_greeting), "")
-        label("Begrüßungsszene:", y);  y += 32
-        self._e_greeting = dropdown(g_options if g_options else ["(keine)"], g_sel, y); y += 54
+        lbl("Begrüßungsszene:", y);  y += 30
+        self._e_greeting = ddmenu(list(self._greeting_opts.keys()), self._sel_greeting, y)
+        y += 54
 
-        # Capture count
-        label("Aufnahmen:", y);  y += 32
-        capture_options = ["0 – Nur Begrüßung", "1 Foto", "2 Fotos", "3 Fotos", "4 Fotos"]
-        cur_count = path.get("scenes", {}).get("capture_count", 0) if path else 0
-        self._e_capture = dropdown(capture_options, capture_options[min(cur_count, 4)], y); y += 54
+        lbl("Anzahl Fotos:", y);  y += 30
+        self._e_capture = ddmenu(_COUNT_OPTIONS, self._sel_count, y)
+        y += 54
 
-        # Collage & print scenes
-        collage_scenes = [(s["id"], s.get("name", s["id"]))
-                          for s in self.app.config.get_scenes_by_type("collage")]
-        print_scenes   = [(s["id"], s.get("name", s["id"]))
-                          for s in self.app.config.get_scenes_by_type("print")]
+        # ── Conditional fields (count ≥ 1) ──────────────────────────────
+        lbl_col = lbl("Collage-Szene:", y);  y += 30
+        self._e_collage = ddmenu(list(self._collage_opts.keys()), self._sel_collage, y);  y += 54
+        lbl_prt = lbl("Druck-Szene:", y);  y += 30
+        self._e_print   = ddmenu(list(self._print_opts.keys()),   self._sel_print,   y);  y += 54
 
-        c_options = [f"{n} [{i}]" for i, n in collage_scenes]
-        p_options = [f"{n} [{i}]" for i, n in print_scenes]
-        cur_col   = path.get("scenes", {}).get("collage", "") if path else ""
-        cur_prt   = path.get("scenes", {}).get("print",   "") if path else ""
-        c_sel = next((f"{n} [{i}]" for i, n in collage_scenes if i == cur_col), "")
-        p_sel = next((f"{n} [{i}]" for i, n in print_scenes   if i == cur_prt), "")
+        self._photo_detail_widgets = [lbl_col, self._e_collage, lbl_prt, self._e_print]
 
-        label("Collage-Szene (bei ≥1 Foto):", y);  y += 32
-        self._e_collage = dropdown(c_options if c_options else ["(keine)"], c_sel, y); y += 54
-
-        label("Druck-Szene (bei ≥1 Foto):", y);  y += 32
-        self._e_print = dropdown(p_options if p_options else ["(keine)"], p_sel, y); y += 54
-
-        # Buttons
-        self._save_btn = pygame_gui.elements.UIButton(
+        # ── Action buttons ───────────────────────────────────────────────
+        self._save_btn = reg(pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect(x0, y, 160, 44),
             text="Speichern", manager=self._mgr,
-        )
-        self._cancel_btn = pygame_gui.elements.UIButton(
+        ))
+        self._cancel_btn = reg(pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect(x0 + 170, y, 120, 44),
             text="Abbrechen", manager=self._mgr,
-        )
-        self._editor_widgets += [self._save_btn, self._cancel_btn]
+        ))
+
+        self._update_count_visibility()
+
+    def _update_count_visibility(self):
+        show = _count_from_label(self._sel_count) > 0
+        for w in self._photo_detail_widgets:
+            try:
+                w.show() if show else w.hide()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Save
+    # ------------------------------------------------------------------
 
     def _save_editor(self):
-        def extract_id(dd_text: str) -> str:
-            # format "Name [id]"
-            if "[" in dd_text and dd_text.endswith("]"):
-                return dd_text.rsplit("[", 1)[1][:-1]
-            return ""
-
         name = self._e_name.get_text().strip() if self._e_name else ""
         if not name:
+            self.app.show_notification("Bitte einen Namen eingeben.", level="error")
             return
 
         try:
@@ -285,52 +347,44 @@ class AdminPaths:
         except ValueError:
             prob = 0
 
-        capture_text = self._e_capture.selected_option if hasattr(self._e_capture, "selected_option") else "0"
-        try:
-            count = int(capture_text[0])
-        except (ValueError, IndexError):
-            count = 0
+        count = _count_from_label(self._sel_count)
 
-        greeting_id = extract_id(self._e_greeting.selected_option) if hasattr(self._e_greeting, "selected_option") else ""
-        collage_id  = extract_id(self._e_collage.selected_option)  if hasattr(self._e_collage,  "selected_option") else ""
-        print_id    = extract_id(self._e_print.selected_option)    if hasattr(self._e_print,    "selected_option") else ""
-
-        # ── Validation ───────────────────────────────────────────────────
+        greeting_id = self._greeting_opts.get(self._sel_greeting, "")
         if not greeting_id:
             self.app.show_notification(
-                "Pfad konnte nicht gespeichert werden: "
                 "Bitte eine Begrüßungsszene auswählen. "
-                "Zuerst im Tab 'Szenen' eine Begrüßungsszene anlegen.",
-                duration=8.0, level="error"
-            )
-            return
-        if count > 0 and not collage_id:
-            self.app.show_notification(
-                "Pfad konnte nicht gespeichert werden: "
-                "Bitte eine Collage-Szene auswählen (erforderlich bei ≥ 1 Foto).",
-                duration=7.0, level="error"
-            )
-            return
-        if count > 0 and not print_id:
-            self.app.show_notification(
-                "Pfad konnte nicht gespeichert werden: "
-                "Bitte eine Druck-Szene auswählen (erforderlich bei ≥ 1 Foto).",
-                duration=7.0, level="error"
+                "(Tab 'Szenen' → Begrüßung → neue Szene anlegen)",
+                duration=8.0, level="error",
             )
             return
 
-        scenes_dict = {"greeting": greeting_id, "capture_count": count}
+        scenes_dict: dict = {"greeting": greeting_id, "capture_count": count}
+
         if count > 0:
+            collage_id = self._collage_opts.get(self._sel_collage, "")
+            if not collage_id:
+                self.app.show_notification(
+                    "Bitte eine Collage-Szene auswählen.",
+                    duration=7.0, level="error",
+                )
+                return
+            print_id = self._print_opts.get(self._sel_print, "")
+            if not print_id:
+                self.app.show_notification(
+                    "Bitte eine Druck-Szene auswählen.",
+                    duration=7.0, level="error",
+                )
+                return
             scenes_dict["collage"] = collage_id
             scenes_dict["print"]   = print_id
 
         if self._editing_id == "__new__":
-            new_path = {
-                "name": name, "probability": prob,
+            self.app.config.add_path({
+                "name": name,
+                "probability": prob,
                 "is_default": not self.app.config.get_paths(),
                 "scenes": scenes_dict,
-            }
-            self.app.config.add_path(new_path)
+            })
         else:
             existing = self._find_path(self._editing_id)
             if existing:

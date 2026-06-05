@@ -193,7 +193,7 @@ class App:
                             duration=8.0, level="error"
                         )
                         return
-                    if not self.storage.usb_available():
+                    if cap_count > 0 and not self.storage.usb_available():
                         self.show_notification(
                             "USB-Stick nicht gefunden – Fotos können nicht gespeichert werden",
                             level="warning"
