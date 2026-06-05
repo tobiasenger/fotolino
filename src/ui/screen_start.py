@@ -98,7 +98,7 @@ class StartScreen(BaseScreen):
         bg_file = bg.get("file", "")
         path    = self.app.config.resolve_asset(bg_file)
 
-        if bg_type == "video" and _CV2 and path.exists():
+        if bg_type in ("video", "Video-Loop") and _CV2 and path.exists():
             cap = cv2.VideoCapture(str(path))
             if cap.isOpened():
                 self._video_fps = cap.get(cv2.CAP_PROP_FPS) or 30

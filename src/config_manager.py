@@ -40,6 +40,7 @@ def _default_settings():
             "flash_duration": 0.15,
         },
         "demo_mode": False,
+        "progress_bar_enabled": True,
     }
 
 
@@ -211,6 +212,12 @@ class ConfigManager:
 
     def cover_path(self, count: int) -> str:
         return self.settings.get("collage_covers", {}).get(str(count), "")
+
+    def reload(self):
+        """Re-read all three config files from disk (e.g. after import)."""
+        self.settings = self._load_or_create("settings.json", _default_settings())
+        self.scenes   = self._load_or_create("scenes.json",   {"scenes": []})
+        self.paths    = self._load_or_create("paths.json",    {"paths": []})
 
     def resolve_asset(self, relative_path: str) -> Path:
         """Resolve a path relative to project root."""

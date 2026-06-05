@@ -127,10 +127,32 @@ class App:
 
                 self._current_screen.handle_event(event)
 
-            self._current_screen.update(dt)
+            try:
+                self._current_screen.update(dt)
+            except Exception as exc:
+                screen_name = self._current_screen.__class__.__name__
+                logger.exception("Unhandled exception in %s.update(): %s", screen_name, exc)
+                self.show_notification(
+                    f"Fehler in {screen_name}: {exc}  →  Zurück zum Start",
+                    duration=10.0, level="error"
+                )
+                try:
+                    self._switch_screen("start")
+                except Exception:
+                    logger.exception("Failed to switch to start screen during recovery")
 
             self.surface.fill(COLOR_BG)
-            self._current_screen.draw(self.surface)
+            try:
+                self._current_screen.draw(self.surface)
+            except Exception as exc:
+                screen_name = self._current_screen.__class__.__name__
+                logger.exception("Unhandled exception in %s.draw(): %s", screen_name, exc)
+                self.surface.fill((30, 0, 0))  # dark red so the crash is visible
+                try:
+                    self._switch_screen("start")
+                except Exception:
+                    logger.exception("Failed to switch to start screen during draw recovery")
+
             self._draw_notifications()
             pygame.display.flip()
 
@@ -145,6 +167,32 @@ class App:
             if self.context.state == AppState.READY:
                 path = self.config.select_random_path()
                 if path:
+                    # Validate that all required scenes are assigned
+                    scenes_cfg  = path.get("scenes", {})
+                    path_name   = path.get("name", "?")
+                    greeting_id = scenes_cfg.get("greeting", "")
+                    cap_count   = scenes_cfg.get("capture_count", 0)
+                    if not greeting_id:
+                        self.show_notification(
+                            f"Pfad '{path_name}' hat keine Begrüßungsszene. "
+                            "Admin-Menü → Pfade → Bearbeiten.",
+                            duration=8.0, level="error"
+                        )
+                        return
+                    if cap_count > 0 and not scenes_cfg.get("collage"):
+                        self.show_notification(
+                            f"Pfad '{path_name}' hat keine Collage-Szene. "
+                            "Admin-Menü → Pfade → Bearbeiten.",
+                            duration=8.0, level="error"
+                        )
+                        return
+                    if cap_count > 0 and not scenes_cfg.get("print"):
+                        self.show_notification(
+                            f"Pfad '{path_name}' hat keine Druck-Szene. "
+                            "Admin-Menü → Pfade → Bearbeiten.",
+                            duration=8.0, level="error"
+                        )
+                        return
                     if not self.storage.usb_available():
                         self.show_notification(
                             "USB-Stick nicht gefunden – Fotos können nicht gespeichert werden",

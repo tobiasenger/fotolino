@@ -295,6 +295,30 @@ class AdminPaths:
         collage_id  = extract_id(self._e_collage.selected_option)  if hasattr(self._e_collage,  "selected_option") else ""
         print_id    = extract_id(self._e_print.selected_option)    if hasattr(self._e_print,    "selected_option") else ""
 
+        # ── Validation ───────────────────────────────────────────────────
+        if not greeting_id:
+            self.app.show_notification(
+                "Pfad konnte nicht gespeichert werden: "
+                "Bitte eine Begrüßungsszene auswählen. "
+                "Zuerst im Tab 'Szenen' eine Begrüßungsszene anlegen.",
+                duration=8.0, level="error"
+            )
+            return
+        if count > 0 and not collage_id:
+            self.app.show_notification(
+                "Pfad konnte nicht gespeichert werden: "
+                "Bitte eine Collage-Szene auswählen (erforderlich bei ≥ 1 Foto).",
+                duration=7.0, level="error"
+            )
+            return
+        if count > 0 and not print_id:
+            self.app.show_notification(
+                "Pfad konnte nicht gespeichert werden: "
+                "Bitte eine Druck-Szene auswählen (erforderlich bei ≥ 1 Foto).",
+                duration=7.0, level="error"
+            )
+            return
+
         scenes_dict = {"greeting": greeting_id, "capture_count": count}
         if count > 0:
             scenes_dict["collage"] = collage_id

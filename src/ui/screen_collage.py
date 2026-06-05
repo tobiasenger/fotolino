@@ -123,12 +123,13 @@ class CollageScreen(BaseScreen):
             # Show finished collage
             surface.blit(self._collage_preview, (0, 0))
         else:
-            # Creating phase – show progress bar
+            # Creating phase
             draw_text_centered(surface, "Collage wird erstellt…", self._fm(),
                                (255, 255, 255), SCREEN_W // 2, SCREEN_H // 2 - 60, shadow=True)
-            draw_progress_bar(surface,
-                              SCREEN_W // 2 - 400, SCREEN_H // 2 + 40,
-                              800, 30, progress, bar_color)
+            if self.app.config.settings.get("progress_bar_enabled", True):
+                draw_progress_bar(surface,
+                                  SCREEN_W // 2 - 400, SCREEN_H // 2 + 40,
+                                  800, 30, progress, bar_color)
 
     # ------------------------------------------------------------------
 

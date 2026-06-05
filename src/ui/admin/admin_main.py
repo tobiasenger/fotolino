@@ -73,7 +73,7 @@ class AdminMain(BaseScreen):
 
     def on_enter(self):
         self._ensure_manager()
-        # Show active tab, hide others
+        pygame.mouse.set_visible(True)
         for i, sv in enumerate(self._sub_views):
             sv.hide()
         self._sub_views[self._active_tab].show()
@@ -81,6 +81,9 @@ class AdminMain(BaseScreen):
     def on_exit(self):
         for sv in self._sub_views:
             sv.hide()
+        # Restore cursor to hidden unless running in windowed dev mode
+        in_fullscreen = self.app.config.settings.get("fullscreen", True) and not self.app.dev_mode
+        pygame.mouse.set_visible(not in_fullscreen)
 
     # ------------------------------------------------------------------
 

@@ -86,11 +86,12 @@ class PrintScreen(BaseScreen):
             surface.blit(scaled, (cx, cy))
 
         # Progress bar
-        bar_color = self.app.config.loading_bar_color_rgb()
-        progress  = min(1.0, self._elapsed / self._duration)
-        draw_progress_bar(surface,
-                          SCREEN_W // 2 - 500, SCREEN_H - 120,
-                          1000, 28, progress, bar_color)
+        if self.app.config.settings.get("progress_bar_enabled", True):
+            bar_color = self.app.config.loading_bar_color_rgb()
+            progress  = min(1.0, self._elapsed / self._duration)
+            draw_progress_bar(surface,
+                              SCREEN_W // 2 - 500, SCREEN_H - 120,
+                              1000, 28, progress, bar_color)
 
         # Info text
         font = get_font(FONT_SMALL)

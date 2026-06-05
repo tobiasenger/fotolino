@@ -2,7 +2,10 @@
 Intro / greeting screen – plays the greeting scene (image+audio or video).
 Auto-advances after the scene duration.
 """
+import logging
 import pygame
+
+logger = logging.getLogger(__name__)
 
 from .base_screen import BaseScreen, draw_text_centered, get_font
 from ..constants import (
@@ -33,16 +36,35 @@ class IntroScreen(BaseScreen):
     # ------------------------------------------------------------------
 
     def on_enter(self):
-        self._elapsed = 0.0
-        ctx = self.app.context
+        self._elapsed     = 0.0
+        self._transitioned = False  # guard: only transition once
+        ctx      = self.app.context
         scene_id = ctx.greeting_scene_id()
         self._scene = self.app.config.get_scene_by_id(scene_id) if scene_id else None
 
+        logger.info(
+            "IntroScreen.on_enter: path=%s | scene_id=%s | scene_found=%s | capture_count=%d",
+            ctx.current_path.get("name") if ctx.current_path else None,
+            scene_id, self._scene is not None, ctx.capture_count(),
+        )
+
         if self._scene:
             self._duration = float(self._scene.get("duration", 5.0))
+            media = self._scene.get("media_type", "?")
+            logger.info("IntroScreen: scene '%s', type=%s, duration=%.1fs",
+                        self._scene.get("name"), media, self._duration)
             self._setup_media()
         else:
-            self._duration = 3.0  # no scene: short pause then continue
+            self._duration = 3.0
+            if scene_id:
+                logger.warning("IntroScreen: scene_id '%s' not found in scenes.json – "
+                               "playing 3s blank, then checking capture_count", scene_id)
+                self.app.show_notification(
+                    f"Szene '{scene_id}' nicht gefunden – bitte Pfad prüfen.",
+                    level="warning"
+                )
+            else:
+                logger.warning("IntroScreen: no greeting scene assigned to this path")
 
     def on_exit(self):
         self.app.audio.stop_music()
@@ -59,12 +81,16 @@ class IntroScreen(BaseScreen):
         self._elapsed += dt
         self._advance_video(dt)
 
-        if self._elapsed >= self._duration:
+        if self._elapsed >= self._duration and not self._transitioned:
+            self._transitioned = True  # prevent firing again before screen switches
             ctx = self.app.context
-            if ctx.capture_count() > 0:
+            count = ctx.capture_count()
+            logger.info("IntroScreen: %.1fs elapsed (duration=%.1fs), capture_count=%d → next screen",
+                        self._elapsed, self._duration, count)
+            if count > 0:
                 self.transition_to("capture")
             else:
-                # Path ends after greeting
+                logger.info("IntroScreen: capture_count=0 → returning to start screen")
                 ctx.current_path = None
                 self.transition_to("start")
 
