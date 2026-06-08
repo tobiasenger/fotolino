@@ -1,10 +1,17 @@
-# Install on Pi via pip (apt packages listed in SETUP.md):
-# sudo apt install -y python3-picamera2 python3-pygame python3-gpiozero python3-rpi.gpio python3-pil
+# ─── Mac / Dev ────────────────────────────────────────────────────────────────
+# pip3 install -r requirements.txt
+#
+# ─── Raspberry Pi (Bookworm 64-bit) ───────────────────────────────────────────
+# sudo apt install -y \
+#   python3-pyqt6 python3-pyqt6.qtmultimedia \
+#   python3-picamera2 python3-gpiozero \
+#   python3-pil python3-numpy python3-mutagen python3-opencv \
+#   vlc python3-vlc python3-cups
 
-pygame>=2.5.0
-pygame-gui>=0.6.0,<0.7.0
+PyQt6>=6.4.0
+PyQt6-Qt6>=6.4.0
+python-vlc>=3.0.18
 Pillow>=10.0.0
 numpy>=1.24.0
 mutagen>=1.47.0
 opencv-python-headless>=4.8.0
-pycups>=2.0.1
