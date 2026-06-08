@@ -216,6 +216,14 @@ class AdminSettings(QWidget):
         cam_btn.clicked.connect(lambda: self.app.switch_screen("camera_test"))
         f.addRow("", cam_btn)
 
+        usb_btn = QPushButton("USB-Stick vorbereiten")
+        usb_btn.setStyleSheet(_BTN)
+        usb_btn.setToolTip(
+            "Erstellt die Ordner 'Fotos' und 'Collagen' auf dem USB-Stick."
+        )
+        usb_btn.clicked.connect(self._prepare_usb)
+        f.addRow("", usb_btn)
+
         # --- Sicherung ---
         _, f = self._scroll_form()
         f.addRow(QLabel("Konfiguration exportieren/importieren:"))
@@ -318,6 +326,13 @@ class AdminSettings(QWidget):
                     duration=8.0, level="warning")
         except Exception:
             pass
+
+    def _prepare_usb(self):
+        try:
+            msg = self.app.storage.prepare_usb()
+            self.app.show_notification(msg, duration=6.0, level="info")
+        except IOError as e:
+            self.app.show_notification(str(e), duration=8.0, level="error")
 
     # ------------------------------------------------------------------
 

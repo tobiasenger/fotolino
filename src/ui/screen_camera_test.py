@@ -50,8 +50,8 @@ class CameraTestScreen(BaseScreen):
 
     def on_enter(self):
         self._status = ""
+        self._setup_preview()   # register QGlPicamera2 BEFORE camera starts streaming
         self.app.camera.start()
-        self._setup_preview()
         self._position_buttons()
         self._back_btn.show()
         self._test_btn.show()
@@ -72,7 +72,7 @@ class CameraTestScreen(BaseScreen):
             self._tried_qgl = True
             try:
                 self._qgl = QGlPicamera2(
-                    self.app.camera._cam, width=self.width() or 1280,
+                    self.app.camera.picam2, width=self.width() or 1280,
                     height=self.height() or 720, keep_ar=True)
                 self._qgl.setParent(self)
                 self._qgl.setGeometry(self.rect())

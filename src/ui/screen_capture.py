@@ -65,8 +65,8 @@ class CaptureScreen(BaseScreen):
         self._set_phase(_Phase.PREVIEW)
 
         self.app.gpio.set_flash_led(True)
+        self._setup_preview()   # register QGlPicamera2 BEFORE camera starts streaming
         self.app.camera.start()
-        self._setup_preview()
 
         if not self.app.camera.is_connected():
             self.app.show_notification(
@@ -90,7 +90,7 @@ class CaptureScreen(BaseScreen):
             self._tried_qgl = True
             try:
                 self._qgl = QGlPicamera2(
-                    self.app.camera._cam, width=self.width() or 1280,
+                    self.app.camera.picam2, width=self.width() or 1280,
                     height=self.height() or 720, keep_ar=False,
                 )
                 self._qgl.setParent(self)

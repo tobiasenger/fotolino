@@ -132,6 +132,8 @@ class FotoboxApp(QMainWindow):
 
     # ------------------------------------------------------------------
 
+    _ADMIN_SCREENS = {"admin", "camera_test"}
+
     def switch_screen(self, name: str):
         if name not in self.screens:
             logger.warning("Unknown screen: %s", name)
@@ -150,6 +152,14 @@ class FotoboxApp(QMainWindow):
         }
         if name in state_map and self.context.state != AppState.ADMIN:
             self.context.state = state_map[name]
+
+        # Cursor: visible in admin/camera_test, hidden everywhere else
+        if not self.dev_mode:
+            if name in self._ADMIN_SCREENS:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+            else:
+                self.setCursor(Qt.CursorShape.BlankCursor)
+
         self.screens[name].on_enter()
         logger.info("Screen → %s", name)
 

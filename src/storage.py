@@ -90,3 +90,41 @@ class StorageManager:
             return usage.free / (1024 * 1024)
         except Exception:
             return 0.0
+
+    def prepare_usb(self) -> str:
+        """Create the required storage folders on the USB drive.
+
+        Returns a status message suitable for display in the UI.
+        Raises IOError if the USB drive is not mounted or not writable.
+        """
+        usb = self._cfg.usb_path()
+        if not usb.exists():
+            raise IOError(
+                f"USB-Stick nicht gefunden unter '{usb}'. "
+                "Bitte USB-Stick einstecken."
+            )
+        created = []
+        for folder in ("Fotos", "Collagen"):
+            p = usb / folder
+            if not p.exists():
+                try:
+                    p.mkdir(parents=True)
+                    created.append(folder)
+                    logger.info("USB-Ordner erstellt: %s", p)
+                except OSError as e:
+                    raise IOError(
+                        f"Ordner '{folder}' konnte nicht erstellt werden: {e}"
+                    ) from e
+            else:
+                logger.info("USB-Ordner bereits vorhanden: %s", p)
+
+        free = self.free_space_mb()
+        if created:
+            return (
+                f"USB-Stick vorbereitet. Erstellt: {', '.join(created)}. "
+                f"Freier Speicher: {free:.0f} MB"
+            )
+        return (
+            f"USB-Stick bereits eingerichtet (Fotos/ und Collagen/ vorhanden). "
+            f"Freier Speicher: {free:.0f} MB"
+        )
