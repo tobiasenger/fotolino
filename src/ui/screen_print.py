@@ -33,7 +33,7 @@ class PrintScreen(BaseScreen):
         ctx = self.app.context
         scene_id = ctx.print_scene_id()
         self._scene = self.app.config.get_scene_by_id(scene_id) if scene_id else None
-        self._duration = float(self._scene.get("duration", 40.0)) if self._scene else 40.0
+        self._duration = 40.0
 
         self._load_collage()
         self._load_bg()
@@ -127,10 +127,11 @@ class PrintScreen(BaseScreen):
         self._print_sent = True
         path = self.app.context.collage_path
         if not path:
-            self.app.show_notification(
-                "Druckfehler: Keine Collage-Datei vorhanden.",
-                level="error"
-            )
+            if not self.app.printer.is_demo():
+                self.app.show_notification(
+                    "Druckfehler: Keine Collage-Datei vorhanden.",
+                    level="error"
+                )
             return
 
         def do_print():

@@ -48,7 +48,7 @@ class CollageScreen(BaseScreen):
 
         scene_id = ctx.collage_scene_id()
         self._scene = self.app.config.get_scene_by_id(scene_id) if scene_id else None
-        self._duration = float(self._scene.get("duration", 10.0)) if self._scene else 10.0
+        self._duration = 10.0
 
         self._build_slideshow()
         self._load_bg()
@@ -126,10 +126,12 @@ class CollageScreen(BaseScreen):
             # Creating phase
             draw_text_centered(surface, "Collage wird erstellt…", self._fm(),
                                (255, 255, 255), SCREEN_W // 2, SCREEN_H // 2 - 60, shadow=True)
-            if self.app.config.settings.get("progress_bar_enabled", True):
-                draw_progress_bar(surface,
-                                  SCREEN_W // 2 - 400, SCREEN_H // 2 + 40,
-                                  800, 30, progress, bar_color)
+
+        # Always draw progress bar at bottom regardless of phase
+        if self.app.config.settings.get("progress_bar_enabled", True):
+            draw_progress_bar(surface,
+                              SCREEN_W // 2 - 500, SCREEN_H - 80,
+                              1000, 24, progress, bar_color)
 
     # ------------------------------------------------------------------
 

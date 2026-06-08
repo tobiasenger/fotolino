@@ -1,8 +1,17 @@
 """
 Intro / greeting screen – plays the greeting scene (image+audio or video).
 Auto-advances after the scene duration.
+
+Video playback strategy:
+  1. mpv subprocess (hardware H.264 decoding via --hwdec=auto on Pi 4)
+  2. Threaded cv2 fallback if mpv is not installed
 """
 import logging
+import queue
+import subprocess
+import threading
+from pathlib import Path
+
 import pygame
 
 logger = logging.getLogger(__name__)
@@ -10,7 +19,7 @@ logger = logging.getLogger(__name__)
 from .base_screen import BaseScreen, draw_text_centered, get_font
 from ..constants import (
     SCREEN_W, SCREEN_H, COLOR_BG, COLOR_TEXT,
-    SCREEN_TRANSITION, FONT_MEDIUM
+    SCREEN_TRANSITION, FONT_MEDIUM, SCENE_GREETING_MAX,
 )
 
 try:
@@ -28,16 +37,20 @@ class IntroScreen(BaseScreen):
         self._elapsed  = 0.0
         self._duration = 5.0
         self._bg_surface: pygame.Surface | None = None
-        self._video_cap = None
-        self._video_fps = 30
-        self._video_accum = 0.0
+        # mpv subprocess (primary video path)
+        self._mpv_proc: subprocess.Popen | None = None
+        # cv2 fallback (threaded)
         self._video_frame_surf: pygame.Surface | None = None
+        self._video_fps    = 30
+        self._video_accum  = 0.0
+        self._frame_queue: queue.Queue | None = None
+        self._decode_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
 
     def on_enter(self):
-        self._elapsed     = 0.0
-        self._transitioned = False  # guard: only transition once
+        self._elapsed      = 0.0
+        self._transitioned = False
         ctx      = self.app.context
         scene_id = ctx.greeting_scene_id()
         self._scene = self.app.config.get_scene_by_id(scene_id) if scene_id else None
@@ -49,7 +62,7 @@ class IntroScreen(BaseScreen):
         )
 
         if self._scene:
-            self._duration = float(self._scene.get("duration", 5.0))
+            self._duration = min(float(self._scene.get("duration", 5.0)), float(SCENE_GREETING_MAX))
             media = self._scene.get("media_type", "?")
             logger.info("IntroScreen: scene '%s', type=%s, duration=%.1fs",
                         self._scene.get("name"), media, self._duration)
@@ -68,9 +81,18 @@ class IntroScreen(BaseScreen):
 
     def on_exit(self):
         self.app.audio.stop_music()
-        if self._video_cap:
-            self._video_cap.release()
-            self._video_cap = None
+        # Terminate mpv if running
+        if self._mpv_proc:
+            self._mpv_proc.terminate()
+            try:
+                self._mpv_proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                self._mpv_proc.kill()
+            self._mpv_proc = None
+        # Stop cv2 worker (daemon thread exits when queue ref is dropped)
+        self._frame_queue = None
+        self._decode_thread = None
+        self._video_frame_surf = None
 
     # ------------------------------------------------------------------
 
@@ -82,7 +104,7 @@ class IntroScreen(BaseScreen):
         self._advance_video(dt)
 
         if self._elapsed >= self._duration and not self._transitioned:
-            self._transitioned = True  # prevent firing again before screen switches
+            self._transitioned = True
             ctx = self.app.context
             count = ctx.capture_count()
             logger.info("IntroScreen: %.1fs elapsed (duration=%.1fs), capture_count=%d → next screen",
@@ -95,6 +117,10 @@ class IntroScreen(BaseScreen):
                 self.transition_to("start")
 
     def draw(self, surface: pygame.Surface):
+        if self._mpv_proc is not None:
+            # mpv window is on top; just fill black so there's no artefact behind it
+            surface.fill(COLOR_BG)
+            return
         if self._video_frame_surf:
             surface.blit(self._video_frame_surf, (0, 0))
         elif self._bg_surface:
@@ -130,7 +156,7 @@ class IntroScreen(BaseScreen):
         self._bg_surface = None
 
     def _load_video(self):
-        if not self._scene or not _CV2:
+        if not self._scene:
             self._load_image_bg()
             return
         video_path = self._scene.get("video", "")
@@ -138,24 +164,75 @@ class IntroScreen(BaseScreen):
         if not p.exists():
             self._load_image_bg()
             return
-        cap = cv2.VideoCapture(str(p))
-        if cap.isOpened():
-            self._video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
-            self._video_cap = cap
-            self._video_frame_surf = pygame.Surface((SCREEN_W, SCREEN_H))
+
+        # Primary: mpv with hardware decoding
+        try:
+            args = [
+                "mpv",
+                "--fullscreen",
+                "--hwdec=auto",      # use V4L2M2M / MMAL on Pi 4
+                "--no-osc",
+                "--really-quiet",
+                "--no-terminal",
+                "--loop-file=yes",   # loop short videos to fill the scene duration
+                f"--end={self._duration:.1f}",
+                str(p),
+            ]
+            self._mpv_proc = subprocess.Popen(args)
+            logger.info("IntroScreen: mpv launched for '%s' (%.1fs)", p.name, self._duration)
+            return
+        except FileNotFoundError:
+            logger.warning("mpv not found – install with: sudo apt install mpv")
+
+        # Fallback: threaded cv2 decoder
+        if _CV2:
+            self._load_video_cv2(p)
         else:
             self._load_image_bg()
 
+    def _load_video_cv2(self, p: Path):
+        cap = cv2.VideoCapture(str(p))
+        if not cap.isOpened():
+            self._load_image_bg()
+            return
+        self._video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        self._video_frame_surf = pygame.Surface((SCREEN_W, SCREEN_H))
+        frame_q: queue.Queue = queue.Queue(maxsize=4)
+        self._frame_queue = frame_q
+
+        def _worker():
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    # Loop back to start instead of stopping
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = cap.read()
+                    if not ret:
+                        cap.release()
+                        return
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = cv2.resize(frame, (SCREEN_W, SCREEN_H), interpolation=cv2.INTER_LINEAR)
+                try:
+                    frame_q.put(frame, timeout=1.0)
+                except queue.Full:
+                    pass  # drop if consumer fell behind
+
+        self._decode_thread = threading.Thread(target=_worker, daemon=True)
+        self._decode_thread.start()
+        logger.info("IntroScreen: cv2 threaded decoder started for '%s'", p.name)
+
     def _advance_video(self, dt: float):
-        if not self._video_cap or not _CV2:
+        if self._mpv_proc is not None:
+            return  # mpv handles its own playback
+        if self._frame_queue is None or self._video_frame_surf is None:
             return
         self._video_accum += dt
         frame_time = 1.0 / self._video_fps
         while self._video_accum >= frame_time:
             self._video_accum -= frame_time
-            ret, frame = self._video_cap.read()
-            if not ret:
-                break
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = cv2.resize(frame, (SCREEN_W, SCREEN_H))
-            pygame.surfarray.blit_array(self._video_frame_surf, frame.transpose(1, 0, 2))
+            try:
+                frame = self._frame_queue.get_nowait()
+                pygame.surfarray.blit_array(self._video_frame_surf,
+                                            frame.transpose(1, 0, 2))
+            except queue.Empty:
+                break  # no decoded frame ready yet

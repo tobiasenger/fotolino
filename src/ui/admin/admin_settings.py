@@ -26,15 +26,17 @@ _MARGIN = 20
 _W      = SCREEN_W - 2 * _MARGIN
 _H      = SCREEN_H - _TOP - _MARGIN
 
-# ── Tab bar ────────────────────────────────────────────────────────────
-_TABS = ["Startscreen", "Overlays", "Darstellung", "Gerät", "Sicherung"]
-_TAB_H  = 40
-_TAB_Y  = _TOP + 6
-_TAB_W  = (_W - (_MARGIN + 10) * 2) // len(_TABS) - 4
-_CONT_Y = _TAB_Y + _TAB_H + 8   # content area top
-_CONT_X = _MARGIN + 10
-_CONT_W = _W - 20
-_SAVE_Y = SCREEN_H - 65          # global save button
+# ── Vertical sidebar ───────────────────────────────────────────────────
+_TABS = ["Startscreen", "Overlays", "Aufnahme", "Darstellung", "Gerät", "Sicherung"]
+_SIDEBAR_X   = _MARGIN + 10
+_SIDEBAR_W   = 220
+_TAB_BTN_W   = _SIDEBAR_W - 16
+_TAB_BTN_H   = 46
+_TAB_BTN_GAP = 6
+_CONT_X   = _SIDEBAR_X + _SIDEBAR_W + 16
+_CONT_Y   = _TOP + 10
+_CONT_W   = SCREEN_W - _CONT_X - _MARGIN
+_SAVE_Y   = SCREEN_H - 65
 
 # ── Field widths ───────────────────────────────────────────────────────
 _BROWSE_W = 110
@@ -44,14 +46,18 @@ _PIN_W    = 80
 
 # ── Allowed file extensions ────────────────────────────────────────────
 _EXT = {
-    "image":     {".jpg", ".jpeg", ".png"},
-    "video":     {".mp4", ".avi", ".mov"},
-    "cover_png": {".png"},
+    "image":       {".jpg", ".jpeg", ".png"},
+    "video":       {".mp4", ".avi", ".mov"},
+    "cover_png":   {".png"},
+    "png_overlay": {".png"},
+    "sound":       {".mp3", ".wav", ".ogg"},
 }
 _ASSET_DIR = {
-    "image":     "assets/backgrounds",
-    "video":     "assets/backgrounds",
-    "cover_png": "assets/CollageCovers",
+    "image":       "assets/backgrounds",
+    "video":       "assets/backgrounds",
+    "cover_png":   "assets/CollageCovers",
+    "png_overlay": "assets/images",
+    "sound":       "assets/sounds",
 }
 
 
@@ -70,6 +76,7 @@ class AdminSettings:
 
         self._status_msg = ""
         self._status_ok  = True
+        self._rebuild_pending = False
 
         self._file_dialog             = None
         self._file_dialog_target: str | None = None
@@ -130,19 +137,37 @@ class AdminSettings:
                 self._import_config(name)
             return
 
+        # Camera test button
+        if el == self._fields.get("camera_test_btn"):
+            self._open_camera_test(); return
+
         # Browse buttons
-        for key in ("bg_file", "cover_1", "cover_2", "cover_3", "cover_4"):
+        for key in ("bg_file", "cover_1", "cover_2", "cover_3", "cover_4",
+                    "capture_overlay", "shutter_click"):
             if el == self._fields.get(f"browse_{key}"):
                 self._open_dialog(key); return
 
     def update(self, dt: float):
-        pass
+        if self._rebuild_pending:
+            self._rebuild_pending = False
+            self.hide()
+            self.show()
 
     def draw(self, surface: pygame.Surface):
         if not self._active:
             return
-        pygame.draw.rect(surface, ADMIN_PANEL,
-                         (_MARGIN, _TAB_Y - 4, _W, _H - _TAB_Y + _TOP + 4), border_radius=8)
+        panel_y = _TOP + 4
+        panel_h = SCREEN_H - panel_y - _MARGIN
+        pygame.draw.rect(surface, ADMIN_PANEL, (_MARGIN, panel_y, _W, panel_h), border_radius=8)
+        # Sidebar divider line
+        div_x = _SIDEBAR_X + _SIDEBAR_W + 8
+        pygame.draw.line(surface, (50, 50, 80), (div_x, panel_y + 8), (div_x, SCREEN_H - _MARGIN), 2)
+        # Active tab highlight bar
+        if self._active_tab in _TABS:
+            idx   = _TABS.index(self._active_tab)
+            tab_y = _CONT_Y + idx * (_TAB_BTN_H + _TAB_BTN_GAP)
+            pygame.draw.rect(surface, (255, 102, 0),
+                             (_SIDEBAR_X + 4, tab_y, 4, _TAB_BTN_H), border_radius=2)
         if self._status_msg:
             color = (80, 210, 100) if self._status_ok else (220, 60, 60)
             surf  = get_font(22).render(self._status_msg, True, color)
@@ -192,11 +217,14 @@ class AdminSettings:
         self._kill_all()
         cfg = self.app.config.settings
 
-        # ── Tab buttons ────────────────────────────────────────────────
+        # ── Sidebar tab buttons (vertical) ─────────────────────────────
         for i, tab in enumerate(_TABS):
             btn = pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect(
-                    _CONT_X + i * (_TAB_W + 4), _TAB_Y, _TAB_W, _TAB_H
+                    _SIDEBAR_X + 8,
+                    _CONT_Y + i * (_TAB_BTN_H + _TAB_BTN_GAP),
+                    _TAB_BTN_W,
+                    _TAB_BTN_H,
                 ),
                 text=tab, manager=self._mgr,
             )
@@ -213,6 +241,7 @@ class AdminSettings:
         # ── Tab content ────────────────────────────────────────────────
         self._build_startscreen(cfg)
         self._build_overlays(cfg)
+        self._build_aufnahme(cfg)
         self._build_darstellung(cfg)
         self._build_geraet(cfg)
         self._build_sicherung()
@@ -308,6 +337,45 @@ class AdminSettings:
             self._lbl(f"{n} {plural}:", x, y, tab, _ENTRY_W); y += 28
             self._entry_browse(f"cover_{n}", f"cover_{n}", covers.get(str(n), ""), x, y, tab)
             y += 50
+
+    # ------------------------------------------------------------------
+    # Tab: Aufnahme
+    # ------------------------------------------------------------------
+
+    def _build_aufnahme(self, cfg: dict):
+        tab     = "Aufnahme"
+        timing  = cfg.get("capture_timing", {})
+        sounds  = cfg.get("system_sounds", {})
+        x, y    = _CONT_X, _CONT_Y
+
+        # Capture overlay PNG
+        self._lbl("Kamera-Overlay (PNG mit Transparenz, über Live-Bild):", x, y, tab, _CONT_W); y += 30
+        self._entry_browse("capture_overlay", "capture_overlay",
+                           cfg.get("capture_overlay", ""), x, y, tab); y += 56
+
+        # Shutter click sound
+        self._lbl("Auslöserton (Klick-Sound):", x, y, tab, _CONT_W); y += 30
+        self._entry_browse("shutter_click", "shutter_click",
+                           sounds.get("shutter_click", ""), x, y, tab); y += 56
+
+        # Smile text
+        self._lbl("Text nach Countdown (leer = kein Text):", x, y, tab, _CONT_W); y += 30
+        self._entry("smile_text", timing.get("smile_text", "Lächeln!"), x, y, tab, 400); y += 56
+
+        # Smile enabled
+        self._lbl("Text anzeigen:", x, y, tab, 300); y += 30
+        self._dropdown("smile_enabled",
+                       ["Ja", "Nein"],
+                       "Ja" if timing.get("smile_enabled", True) else "Nein",
+                       x, y, tab, 200); y += 56
+
+        # Camera test button
+        self._lbl("Kamera testen (Live-Vorschau + Testfoto):", x, y, tab, _CONT_W); y += 30
+        btn = self._reg(pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(x, y, 280, 48),
+            text="🎥  Kamera testen", manager=self._mgr,
+        ), tab)
+        self._fields["camera_test_btn"] = btn
 
     # ------------------------------------------------------------------
     # Tab: Darstellung
@@ -423,6 +491,10 @@ class AdminSettings:
             ftype    = "video" if is_video else "image"
         elif target.startswith("cover_"):
             ftype = "cover_png"
+        elif target == "capture_overlay":
+            ftype = "png_overlay"
+        elif target == "shutter_click":
+            ftype = "sound"
         else:
             ftype = "image"
 
@@ -451,11 +523,19 @@ class AdminSettings:
             w = self._fields.get("bg_file")
         elif target.startswith("cover_"):
             w = self._fields.get(target)
+        elif target == "capture_overlay":
+            w = self._fields.get("capture_overlay")
+        elif target == "shutter_click":
+            w = self._fields.get("shutter_click")
         else:
             return
 
         if w:
             w.set_text(rel)
+
+    def _open_camera_test(self):
+        from ...constants import SCREEN_TRANSITION
+        pygame.event.post(pygame.event.Event(SCREEN_TRANSITION, {"target": "camera_test"}))
 
     # ------------------------------------------------------------------
     # Config export / import
@@ -548,9 +628,8 @@ class AdminSettings:
         import logging
         logging.getLogger(__name__).info("Config imported from %s", src_dir)
 
-        # Rebuild the whole panel to reflect new settings
-        self.hide()
-        self.show()
+        # Defer rebuild to next update() tick — killing widgets mid-event crashes pygame_gui
+        self._rebuild_pending = True
 
     # ------------------------------------------------------------------
     # Save
@@ -623,6 +702,21 @@ class AdminSettings:
             val = get_text(f"gpio_{key}", int)
             if val is not None:
                 gpio[key] = val
+
+        # Capture overlay
+        cfg["capture_overlay"] = get_text("capture_overlay") or ""
+
+        # Shutter click sound
+        cfg.setdefault("system_sounds", {})["shutter_click"] = get_text("shutter_click") or ""
+
+        # Smile settings
+        timing = cfg.setdefault("capture_timing", {})
+        smile_text_val = get_text("smile_text")
+        if smile_text_val is not None:
+            timing["smile_text"] = smile_text_val
+        smile_sel = get_dd("smile_enabled")
+        if smile_sel is not None:
+            timing["smile_enabled"] = smile_sel == "Ja"
 
         self.app.config.save_settings()
 

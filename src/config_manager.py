@@ -32,10 +32,13 @@ def _default_settings():
             "shutter_click": "assets/sounds/click.mp3",
             "countdown_beep": "",
         },
+        "capture_overlay": "",
         "capture_timing": {
             "initial_preview_seconds": 2.0,
             "countdown_from": 3,
             "smile_duration": 0.8,
+            "smile_text": "Lächeln!",
+            "smile_enabled": True,
             "post_photo_pause": 2.0,
             "flash_duration": 0.15,
         },
@@ -60,7 +63,12 @@ class ConfigManager:
         if path.exists():
             try:
                 with open(path, encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if isinstance(data, dict) and isinstance(default, dict):
+                    for k, v in default.items():
+                        if k not in data:
+                            data[k] = v
+                return data
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Could not load %s (%s), using defaults", filename, e)
         self._save_raw(filename, default)
