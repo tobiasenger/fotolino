@@ -1,6 +1,4 @@
 import logging
-import pygame
-from .constants import BUTTON_EVENT
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +19,13 @@ class _MockLED:
 
 
 class GPIOHandler:
-    def __init__(self, config_manager):
+    def __init__(self, config_manager, button_callback):
+        """
+        button_callback: callable(action: str) invoked from the GPIO thread.
+        In the PyQt6 app this is a pyqtSignal.emit, which auto-queues the call
+        onto the main (GUI) thread.
+        """
+        self._callback = button_callback
         pins = config_manager.gpio_pins()
         self._flash_enabled = config_manager.settings.get("flash_enabled", True)
 
@@ -31,8 +35,8 @@ class GPIOHandler:
                 self._admin_btn  = Button(pins["pin_admin_button"],  pull_up=True, bounce_time=0.1)
                 self._led_flash  = LED(pins["pin_led_flash"])
                 self._led_ready  = LED(pins["pin_led_ready"])
-                self._start_btn.when_pressed = lambda: self._post("start_button")
-                self._admin_btn.when_pressed = lambda: self._post("admin_button")
+                self._start_btn.when_pressed = lambda: self._fire("start_button")
+                self._admin_btn.when_pressed = lambda: self._fire("admin_button")
                 logger.info("GPIO initialised on pins %s", pins)
             except Exception as e:
                 logger.warning("GPIO setup failed (%s) – falling back to keyboard", e)
@@ -46,10 +50,9 @@ class GPIOHandler:
     # Internal
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _post(action: str):
+    def _fire(self, action: str):
         try:
-            pygame.event.post(pygame.event.Event(BUTTON_EVENT, {"action": action}))
+            self._callback(action)
         except Exception:
             pass
 
@@ -63,18 +66,6 @@ class GPIOHandler:
 
     def set_ready_led(self, on: bool):
         self._led_ready.on() if on else self._led_ready.off()
-
-    # ------------------------------------------------------------------
-    # Keyboard fallback (call from main event loop)
-    # ------------------------------------------------------------------
-
-    def handle_keyboard_event(self, event: pygame.event.Event):
-        if event.type != pygame.KEYDOWN:
-            return
-        if event.key == pygame.K_SPACE:
-            self._post("start_button")
-        elif event.key == pygame.K_F1:
-            self._post("admin_button")
 
     # ------------------------------------------------------------------
 

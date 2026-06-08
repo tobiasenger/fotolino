@@ -1,73 +1,105 @@
+"""
+Audio playback for the Fotobox.
+
+Two-tier design:
+  * System sound effects (shutter click) → QSoundEffect. WAV only.
+  * Background music (scene audio)        → VLC MediaPlayer. WAV / MP3 / OGG.
+"""
 import logging
 from pathlib import Path
 
-import pygame
-
 logger = logging.getLogger(__name__)
 
-_MIXER_READY = False
+try:
+    from PyQt6.QtMultimedia import QSoundEffect
+    from PyQt6.QtCore import QUrl
+    _QT_SFX = True
+except ImportError:
+    _QT_SFX = False
+    logger.info("QSoundEffect not available – system sounds disabled")
 
-
-def _ensure_mixer():
-    global _MIXER_READY
-    if not _MIXER_READY:
-        try:
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
-            _MIXER_READY = True
-        except pygame.error as e:
-            logger.warning("pygame.mixer init failed: %s", e)
+try:
+    import vlc as _vlc
+    _VLC = True
+except ImportError:
+    _VLC = False
+    logger.info("python-vlc not available – background music disabled")
 
 
 class AudioPlayer:
-    """Plays MP3/WAV files. Supports one background music track + unlimited sound effects."""
+    """One background music track (VLC) + unlimited short WAV sound effects (Qt)."""
 
     def __init__(self):
-        _ensure_mixer()
-        self._sfx_channel: pygame.mixer.Channel | None = None
+        self._instance = _vlc.Instance("--no-video") if _VLC else None
+        self._music_player = None          # vlc.MediaPlayer for current music
+        self._effects: list = []           # keep QSoundEffect refs alive
 
     # ------------------------------------------------------------------
-    # Music (single long track)
+    # Music (single long track) – VLC
     # ------------------------------------------------------------------
 
-    def play_music(self, path: str | Path, loops: int = 0, fade_ms: int = 0):
-        if not _MIXER_READY:
+    def play_music(self, path, loops: int = 0):
+        """Play background music. loops=-1 → loop forever (VLC input-repeat)."""
+        if not self._instance:
             return
         p = Path(path)
         if not p.exists():
             logger.warning("Audio file not found: %s", p)
             return
         try:
-            pygame.mixer.music.load(str(p))
-            pygame.mixer.music.play(loops=loops, fade_ms=fade_ms)
-        except pygame.error as e:
+            self.stop_music()
+            media = self._instance.media_new(str(p))
+            if loops != 0:
+                # -1 means loop forever; otherwise repeat `loops` extra times.
+                repeat = 65535 if loops < 0 else loops
+                media.add_option(f"input-repeat={repeat}")
+            self._music_player = self._instance.media_player_new()
+            self._music_player.set_media(media)
+            self._music_player.play()
+        except Exception as e:
             logger.warning("Could not play music %s: %s", p, e)
 
-    def stop_music(self, fade_ms: int = 0):
-        if not _MIXER_READY:
-            return
-        if fade_ms:
-            pygame.mixer.music.fadeout(fade_ms)
-        else:
-            pygame.mixer.music.stop()
+    def stop_music(self):
+        if self._music_player is not None:
+            try:
+                self._music_player.stop()
+            except Exception:
+                pass
+            self._music_player = None
 
     def music_busy(self) -> bool:
-        return _MIXER_READY and pygame.mixer.music.get_busy()
+        if self._music_player is None:
+            return False
+        try:
+            return self._music_player.is_playing() == 1
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
-    # Sound effects (short one-shot)
+    # Sound effects (short one-shot) – QSoundEffect, WAV only
     # ------------------------------------------------------------------
 
-    def play_sfx(self, path: str | Path):
-        if not _MIXER_READY:
+    def play_sfx(self, path):
+        if not _QT_SFX:
             return
         p = Path(path)
         if not p.exists():
             logger.warning("SFX file not found: %s", p)
             return
+        if p.suffix.lower() != ".wav":
+            logger.warning(
+                "System sound '%s' is not a WAV file – QSoundEffect only supports WAV. "
+                "Sound will not play.", p
+            )
+            return
         try:
-            sound = pygame.mixer.Sound(str(p))
-            sound.play()
-        except pygame.error as e:
+            effect = QSoundEffect()
+            effect.setSource(QUrl.fromLocalFile(str(p)))
+            effect.play()
+            # Keep a reference so the object isn't garbage-collected mid-playback.
+            self._effects.append(effect)
+            self._effects = [e for e in self._effects if e.isPlaying() or e is effect]
+        except Exception as e:
             logger.warning("Could not play sfx %s: %s", p, e)
 
     # ------------------------------------------------------------------
@@ -75,31 +107,50 @@ class AudioPlayer:
     # ------------------------------------------------------------------
 
     def stop_all(self):
-        if not _MIXER_READY:
-            return
-        pygame.mixer.music.stop()
-        pygame.mixer.stop()
+        self.stop_music()
+        for e in self._effects:
+            try:
+                e.stop()
+            except Exception:
+                pass
+        self._effects.clear()
 
     @staticmethod
-    def get_mp3_duration(path: str | Path) -> float | None:
-        """Return duration in seconds, or None on failure."""
+    def get_mp3_duration(path) -> float | None:
+        """Return audio duration in seconds, or None on failure (uses mutagen)."""
         try:
-            from mutagen.mp3 import MP3
-            audio = MP3(str(path))
-            return audio.info.length
+            from mutagen import File as MutagenFile
+            audio = MutagenFile(str(path))
+            if audio is not None and audio.info is not None:
+                return float(audio.info.length)
         except Exception as e:
             logger.warning("Cannot read duration of %s: %s", path, e)
-            return None
+        return None
 
     @staticmethod
-    def get_video_duration(path: str | Path) -> float | None:
+    def get_video_duration(path) -> float | None:
         try:
             import cv2
             cap = cv2.VideoCapture(str(path))
-            fps   = cap.get(cv2.CAP_PROP_FPS) or 30
+            fps    = cap.get(cv2.CAP_PROP_FPS) or 30
             frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             cap.release()
-            return frames / fps if fps else None
+            if fps and frames:
+                return frames / fps
         except Exception as e:
-            logger.warning("Cannot read video duration of %s: %s", path, e)
-            return None
+            logger.warning("Cannot read video duration of %s (cv2): %s", path, e)
+        # Fallback to VLC media parsing if available
+        if _VLC:
+            try:
+                inst = _vlc.Instance("--no-video")
+                media = inst.media_new(str(path))
+                media.parse_with_options(_vlc.MediaParseFlag.local, 3000)
+                import time
+                for _ in range(30):
+                    dur = media.get_duration()
+                    if dur > 0:
+                        return dur / 1000.0
+                    time.sleep(0.05)
+            except Exception as e:
+                logger.warning("Cannot read video duration of %s (vlc): %s", path, e)
+        return None

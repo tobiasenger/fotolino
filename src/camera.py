@@ -19,7 +19,6 @@ class CameraController:
         self._h = height
         self._cam = None
         self._streaming = False
-        self._frame_surface = None  # cached pygame Surface
 
         if _PICAM_AVAILABLE:
             try:
@@ -64,18 +63,24 @@ class CameraController:
                 logger.warning("Photo capture error: %s", e)
         return self._mock_frame()
 
-    def get_pygame_surface(self, mirror: bool = True):
-        """Return the current frame as a pygame.Surface (1920×1080)."""
-        import pygame
+    def get_qpixmap(self, mirror: bool = True):
+        """Return the current frame as a QPixmap."""
+        from PyQt6.QtGui import QImage, QPixmap
         frame = self.get_frame_rgb()
         if mirror:
             frame = frame[:, ::-1, :]              # horizontal flip
-        frame_hw3 = frame.transpose(1, 0, 2)       # (W, H, 3) for pygame
-        if self._frame_surface is None:
-            self._frame_surface = pygame.Surface((self._w, self._h))
-        import pygame.surfarray
-        pygame.surfarray.blit_array(self._frame_surface, frame_hw3)
-        return self._frame_surface
+        # Ensure C-contiguous memory for QImage.
+        frame = np.ascontiguousarray(frame)
+        h, w, c = frame.shape
+        qimg = QImage(frame.data, w, h, c * w, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(qimg.copy())      # .copy() to own the data
+
+    def is_connected(self) -> bool:
+        return self._cam is not None
+
+    @property
+    def resolution(self) -> tuple:
+        return (self._w, self._h)
 
     # ------------------------------------------------------------------
 

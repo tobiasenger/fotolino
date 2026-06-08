@@ -1,728 +1,363 @@
 """
-Admin Settings tab – tabbed layout grouped by category.
+Admin Settings tab (PyQt6).
 
-Tabs:
-  Startscreen  – idle background (image / video loop)
-  Overlays     – PNG collage covers (1–4 photos)
-  Darstellung  – progress bar visibility + colour
-  Gerät        – demo mode, flash LED, printer, USB, GPIO pins
-  Sicherung    – export config (with custom name) + import
+Left sidebar: 6 tabs (Startscreen / Overlays / Aufnahme / Darstellung / Gerät / Sicherung).
+Right: QStackedWidget with a QScrollArea per tab; each tab uses a QFormLayout.
+
+File-format validation:
+  * Shutter click: WAV only (QSoundEffect) – red warning if MP3/OGG selected.
+  * Background image/video: .jpg/.jpeg/.png or .mp4/.avi/.mov.
+  * Collage overlays: .png (1800×1200 validated on save).
 """
 from __future__ import annotations
+import json
+import shutil
 from pathlib import Path
 
-import pygame
-import pygame_gui
+from PyQt6.QtWidgets import (
+    QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLabel, QLineEdit,
+    QComboBox, QPushButton, QStackedWidget, QScrollArea, QFileDialog,
+)
+from PyQt6.QtCore import Qt
 from PIL import Image
 
-from ...constants import SCREEN_W, SCREEN_H, ADMIN_PANEL, COLLAGE_W, COLLAGE_H
-from ..base_screen import get_font
+from ...constants import COLLAGE_W, COLLAGE_H
 from .file_dialog import open_file_dialog
 
-_PROJECT_ROOT = Path(__file__).parents[3]
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+_VIDEO_EXTS = {".mp4", ".avi", ".mov"}
+_BG_EXTS = _IMAGE_EXTS | _VIDEO_EXTS
+_PNG_EXTS = {".png"}
+_WAV_EXTS = {".wav"}
 
-_TOP    = 70
-_MARGIN = 20
-_W      = SCREEN_W - 2 * _MARGIN
-_H      = SCREEN_H - _TOP - _MARGIN
-
-# ── Vertical sidebar ───────────────────────────────────────────────────
 _TABS = ["Startscreen", "Overlays", "Aufnahme", "Darstellung", "Gerät", "Sicherung"]
-_SIDEBAR_X   = _MARGIN + 10
-_SIDEBAR_W   = 220
-_TAB_BTN_W   = _SIDEBAR_W - 16
-_TAB_BTN_H   = 46
-_TAB_BTN_GAP = 6
-_CONT_X   = _SIDEBAR_X + _SIDEBAR_W + 16
-_CONT_Y   = _TOP + 10
-_CONT_W   = SCREEN_W - _CONT_X - _MARGIN
-_SAVE_Y   = SCREEN_H - 65
 
-# ── Field widths ───────────────────────────────────────────────────────
-_BROWSE_W = 110
-_ENTRY_W  = 600
-_ENTRY_WITH_BROWSE = _ENTRY_W - _BROWSE_W - 10
-_PIN_W    = 80
-
-# ── Allowed file extensions ────────────────────────────────────────────
-_EXT = {
-    "image":       {".jpg", ".jpeg", ".png"},
-    "video":       {".mp4", ".avi", ".mov"},
-    "cover_png":   {".png"},
-    "png_overlay": {".png"},
-    "sound":       {".mp3", ".wav", ".ogg"},
-}
-_ASSET_DIR = {
-    "image":       "assets/backgrounds",
-    "video":       "assets/backgrounds",
-    "cover_png":   "assets/CollageCovers",
-    "png_overlay": "assets/images",
-    "sound":       "assets/sounds",
-}
+_BTN = (
+    "QPushButton { background: #2a2a50; color: white; border: 1px solid #444488; "
+    "border-radius: 5px; padding: 8px 14px; } QPushButton:hover { border-color: #ff6600; }"
+)
+_TAB_BTN = (
+    "QPushButton { background: #2a2a50; color: white; border: none; border-radius: 5px; "
+    "padding: 10px; text-align: left; } QPushButton:checked { background: #ff6600; }")
 
 
-class AdminSettings:
-    def __init__(self, app, manager: pygame_gui.UIManager):
-        self.app      = app
-        self._mgr     = manager
-        self._active  = False
-        self._widgets: list = []
-        self._fields:  dict = {}
+class AdminSettings(QWidget):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        self._fields: dict = {}
+        self._warns: dict = {}
 
-        # Per-tab widget lists (for show/hide on tab switch)
-        self._tab_content: dict = {t: [] for t in _TABS}
-        self._tab_btns:    dict = {}
-        self._active_tab   = _TABS[0]
+        root = QHBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
 
-        self._status_msg = ""
-        self._status_ok  = True
-        self._rebuild_pending = False
+        # Sidebar
+        side = QVBoxLayout()
+        side.setSpacing(6)
+        self._tab_btns = {}
+        for i, name in enumerate(_TABS):
+            b = QPushButton(name)
+            b.setCheckable(True)
+            b.setStyleSheet(_TAB_BTN)
+            b.clicked.connect(lambda _, idx=i: self._show_tab(idx))
+            side.addWidget(b)
+            self._tab_btns[i] = b
+        side.addStretch()
+        save = QPushButton("Speichern")
+        save.setStyleSheet(_BTN)
+        save.clicked.connect(self._save)
+        side.addWidget(save)
+        side_w = QWidget()
+        side_w.setLayout(side)
+        side_w.setFixedWidth(200)
+        root.addWidget(side_w)
 
-        self._file_dialog             = None
-        self._file_dialog_target: str | None = None
+        # Content
+        self._stack = QStackedWidget()
+        root.addWidget(self._stack, 1)
+
+        self._build_tabs()
+        self._show_tab(0)
 
     # ------------------------------------------------------------------
 
-    def show(self):
-        self._active = True
-        self._build()
+    def _scroll_form(self) -> tuple[QScrollArea, QFormLayout]:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        form = QFormLayout(inner)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        scroll.setWidget(inner)
+        self._stack.addWidget(scroll)
+        return scroll, form
 
-    def hide(self):
-        self._active = False
-        self._kill_all()
+    def _entry(self, key: str, value, form: QFormLayout, label: str):
+        line = QLineEdit(str(value))
+        self._fields[key] = line
+        form.addRow(label, line)
+        return line
 
-    # ------------------------------------------------------------------
+    def _file_row(self, key: str, value, form: QFormLayout, label: str,
+                  exts: set, kind: str):
+        line = QLineEdit(str(value))
+        browse = QPushButton("…")
+        browse.setStyleSheet(_BTN)
+        warn = QLabel("")
+        warn.setStyleSheet("color: #ff6060;")
+        warn.setWordWrap(True)
 
-    def handle_event(self, event: pygame.event.Event):
-        if not self._active:
-            return
-
-        if event.type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
-            self._on_file_picked(event.text)
-            self._file_dialog = None
-            self._file_dialog_target = None
-            return
-
-        if event.type == pygame_gui.UI_DROP_DOWN_MENU_CHANGED:
-            if event.ui_element == self._fields.get("bg_type"):
-                is_video = event.text == "Video-Loop"
-                hint = self._fields.get("bg_file_hint")
-                if hint:
-                    hint.set_text("Videodatei (.mp4):" if is_video else "Bilddatei (.jpg / .png):")
-            return
-
-        if event.type != pygame_gui.UI_BUTTON_PRESSED:
-            return
-        el = event.ui_element
-
-        # Tab switching
-        for tab_name, btn in self._tab_btns.items():
-            if el == btn:
-                self._switch_tab(tab_name)
+        def do_browse():
+            base = str(self.app.config.resolve_asset("assets"))
+            sel = open_file_dialog(self, base, f"{kind} auswählen", exts)
+            if not sel:
                 return
+            try:
+                rel = Path(sel).resolve().relative_to(
+                    self.app.config.resolve_asset("").resolve())
+                line.setText(str(rel))
+            except Exception:
+                line.setText(sel)
+            self._validate(line, exts, kind, warn)
 
-        # Save all settings
-        if el == self._fields.get("save_btn"):
-            self._save(); return
+        browse.clicked.connect(do_browse)
+        line.textChanged.connect(lambda: self._validate(line, exts, kind, warn))
 
-        # Export
-        if el == self._fields.get("export_btn"):
-            self._export_config(); return
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(line, 1)
+        lay.addWidget(browse)
 
-        # Import
-        if el == self._fields.get("import_btn"):
-            dd = self._fields.get("import_dd")
-            name = getattr(dd, "selected_option", None)
-            if name:
-                self._import_config(name)
-            return
+        self._fields[key] = line
+        self._warns[key] = warn
+        form.addRow(label, row)
+        form.addRow("", warn)
+        self._validate(line, exts, kind, warn)
+        return line
 
-        # Camera test button
-        if el == self._fields.get("camera_test_btn"):
-            self._open_camera_test(); return
+    @staticmethod
+    def _validate(line: QLineEdit, exts: set, kind: str, warn: QLabel):
+        path = line.text().strip()
+        if path and Path(path).suffix.lower() not in exts:
+            allowed = ", ".join(sorted(exts))
+            warn.setText(f"Warnung: {kind} sollte eines dieser Formate sein: {allowed}")
+        else:
+            warn.setText("")
 
-        # Browse buttons
-        for key in ("bg_file", "cover_1", "cover_2", "cover_3", "cover_4",
-                    "capture_overlay", "shutter_click"):
-            if el == self._fields.get(f"browse_{key}"):
-                self._open_dialog(key); return
-
-    def update(self, dt: float):
-        if self._rebuild_pending:
-            self._rebuild_pending = False
-            self.hide()
-            self.show()
-
-    def draw(self, surface: pygame.Surface):
-        if not self._active:
-            return
-        panel_y = _TOP + 4
-        panel_h = SCREEN_H - panel_y - _MARGIN
-        pygame.draw.rect(surface, ADMIN_PANEL, (_MARGIN, panel_y, _W, panel_h), border_radius=8)
-        # Sidebar divider line
-        div_x = _SIDEBAR_X + _SIDEBAR_W + 8
-        pygame.draw.line(surface, (50, 50, 80), (div_x, panel_y + 8), (div_x, SCREEN_H - _MARGIN), 2)
-        # Active tab highlight bar
-        if self._active_tab in _TABS:
-            idx   = _TABS.index(self._active_tab)
-            tab_y = _CONT_Y + idx * (_TAB_BTN_H + _TAB_BTN_GAP)
-            pygame.draw.rect(surface, (255, 102, 0),
-                             (_SIDEBAR_X + 4, tab_y, 4, _TAB_BTN_H), border_radius=2)
-        if self._status_msg:
-            color = (80, 210, 100) if self._status_ok else (220, 60, 60)
-            surf  = get_font(22).render(self._status_msg, True, color)
-            surface.blit(surf, (_CONT_X, SCREEN_H - 50))
+    def _combo(self, key: str, options: list[tuple[str, object]], current, form, label):
+        combo = QComboBox()
+        for text, data in options:
+            combo.addItem(text, data)
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._fields[key] = combo
+        form.addRow(label, combo)
+        return combo
 
     # ------------------------------------------------------------------
-    # Tab management
-    # ------------------------------------------------------------------
 
-    def _switch_tab(self, tab_name: str):
-        if tab_name == self._active_tab:
-            return
-        for w in self._tab_content.get(self._active_tab, []):
-            try: w.hide()
-            except Exception: pass
-        self._active_tab = tab_name
-        for w in self._tab_content.get(self._active_tab, []):
-            try: w.show()
-            except Exception: pass
-
-    # ------------------------------------------------------------------
-    # Build
-    # ------------------------------------------------------------------
-
-    def _kill_all(self):
-        for w in self._widgets:
-            try: w.kill()
-            except Exception: pass
-        self._widgets.clear()
-        self._fields.clear()
-        for k in _TABS:
-            self._tab_content[k] = []
-        self._tab_btns.clear()
-        if self._file_dialog:
-            try: self._file_dialog.kill()
-            except Exception: pass
-            self._file_dialog = None
-
-    def _reg(self, w, tab: str | None = None):
-        """Register a widget, optionally into a tab's content list."""
-        self._widgets.append(w)
-        if tab:
-            self._tab_content[tab].append(w)
-        return w
-
-    def _build(self):
-        self._kill_all()
+    def _build_tabs(self):
         cfg = self.app.config.settings
 
-        # ── Sidebar tab buttons (vertical) ─────────────────────────────
-        for i, tab in enumerate(_TABS):
-            btn = pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect(
-                    _SIDEBAR_X + 8,
-                    _CONT_Y + i * (_TAB_BTN_H + _TAB_BTN_GAP),
-                    _TAB_BTN_W,
-                    _TAB_BTN_H,
-                ),
-                text=tab, manager=self._mgr,
-            )
-            self._reg(btn)
-            self._tab_btns[tab] = btn
+        # --- Startscreen ---
+        _, f = self._scroll_form()
+        bg = cfg.get("idle_background", {})
+        self._combo("bg_type", [("Bild", "image"), ("Video", "video")],
+                    bg.get("type", "image"), f, "Hintergrundtyp:")
+        self._file_row("bg_file", bg.get("file", ""), f,
+                       "Hintergrunddatei:", _BG_EXTS, "Hintergrund")
 
-        # ── Global save button (always visible) ────────────────────────
-        save_btn = self._reg(pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(_CONT_X, _SAVE_Y, 300, 46),
-            text="Einstellungen speichern", manager=self._mgr,
-        ))
-        self._fields["save_btn"] = save_btn
-
-        # ── Tab content ────────────────────────────────────────────────
-        self._build_startscreen(cfg)
-        self._build_overlays(cfg)
-        self._build_aufnahme(cfg)
-        self._build_darstellung(cfg)
-        self._build_geraet(cfg)
-        self._build_sicherung()
-
-        # Hide all tabs except the active one
-        for tab in _TABS:
-            if tab != self._active_tab:
-                for w in self._tab_content[tab]:
-                    try: w.hide()
-                    except Exception: pass
-
-    # ── helpers shared by tab builders ────────────────────────────────
-
-    def _lbl(self, text: str, x: int, y: int, tab: str, width: int = 560, height: int = 28):
-        return self._reg(pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(x, y, width, height),
-            text=text, manager=self._mgr,
-        ), tab)
-
-    def _entry(self, key: str, value, x: int, y: int, tab: str, width: int = _ENTRY_W):
-        e = self._reg(pygame_gui.elements.UITextEntryLine(
-            relative_rect=pygame.Rect(x, y, width, 40),
-            manager=self._mgr,
-        ), tab)
-        e.set_text(str(value))
-        self._fields[key] = e
-        return e
-
-    def _entry_browse(self, entry_key: str, browse_key: str, value: str,
-                      x: int, y: int, tab: str):
-        e = self._reg(pygame_gui.elements.UITextEntryLine(
-            relative_rect=pygame.Rect(x, y, _ENTRY_WITH_BROWSE, 40),
-            manager=self._mgr,
-        ), tab)
-        e.set_text(str(value))
-        self._fields[entry_key] = e
-        btn = self._reg(pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x + _ENTRY_WITH_BROWSE + 10, y, _BROWSE_W, 40),
-            text="📂 Suchen", manager=self._mgr,
-        ), tab)
-        self._fields[f"browse_{browse_key}"] = btn
-        return e, btn
-
-    def _dropdown(self, key: str, options: list, selected: str,
-                  x: int, y: int, tab: str, width: int = 220):
-        if selected not in options:
-            selected = options[0]
-        dd = self._reg(pygame_gui.elements.UIDropDownMenu(
-            options_list=options, starting_option=selected,
-            relative_rect=pygame.Rect(x, y, width, 44),
-            manager=self._mgr,
-        ), tab)
-        self._fields[key] = dd
-        return dd
-
-    # ------------------------------------------------------------------
-    # Tab: Startscreen
-    # ------------------------------------------------------------------
-
-    def _build_startscreen(self, cfg: dict):
-        tab    = "Startscreen"
-        idle   = cfg.get("idle_background", {})
-        x, y   = _CONT_X, _CONT_Y
-
-        self._lbl("Hintergrundtyp:", x, y, tab, _ENTRY_W); y += 30
-        bg_type_val = "Video-Loop" if idle.get("type") == "video" else "Bild (statisch)"
-        self._dropdown("bg_type", ["Bild (statisch)", "Video-Loop"], bg_type_val, x, y, tab, 280)
-        y += 52
-
-        is_video   = idle.get("type") == "video"
-        hint_text  = "Videodatei (.mp4):" if is_video else "Bilddatei (.jpg / .png):"
-        hint = self._reg(pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(x, y, _ENTRY_W, 28),
-            text=hint_text, manager=self._mgr,
-        ), tab)
-        self._fields["bg_file_hint"] = hint; y += 30
-        self._entry_browse("bg_file", "bg_file", idle.get("file", ""), x, y, tab); y += 52
-
-    # ------------------------------------------------------------------
-    # Tab: Overlays
-    # ------------------------------------------------------------------
-
-    def _build_overlays(self, cfg: dict):
-        tab    = "Overlays"
+        # --- Overlays (collage covers) ---
+        _, f = self._scroll_form()
+        f.addRow(QLabel("Collage-Overlays (PNG, 1800×1200 px):"))
         covers = cfg.get("collage_covers", {})
-        x, y   = _CONT_X, _CONT_Y
-
-        self._lbl("Collage-Overlays (PNG, 1800×1200 px) – ein Cover pro Foto-Anzahl:",
-                  x, y, tab, _CONT_W); y += 34
-
         for n in range(1, 5):
-            plural = "Foto" if n == 1 else "Fotos"
-            self._lbl(f"{n} {plural}:", x, y, tab, _ENTRY_W); y += 28
-            self._entry_browse(f"cover_{n}", f"cover_{n}", covers.get(str(n), ""), x, y, tab)
-            y += 50
+            self._file_row(f"cover_{n}", covers.get(str(n), ""), f,
+                           f"{n} Foto(s):", _PNG_EXTS, "Overlay")
+
+        # --- Aufnahme ---
+        _, f = self._scroll_form()
+        sounds = cfg.get("system_sounds", {})
+        self._file_row("shutter_click", sounds.get("shutter_click", ""), f,
+                       "Auslöser-Ton (NUR WAV):", _WAV_EXTS, "Auslöser-Ton")
+        self._file_row("countdown_beep", sounds.get("countdown_beep", ""), f,
+                       "Countdown-Ton (NUR WAV):", _WAV_EXTS, "Countdown-Ton")
+        timing = cfg.get("capture_timing", {})
+        self._entry("t_preview", timing.get("initial_preview_seconds", 2.0), f,
+                    "Vorschau-Dauer (s):")
+        self._entry("t_countdown", timing.get("countdown_from", 3), f, "Countdown ab:")
+        self._entry("t_smile", timing.get("smile_duration", 0.8), f, "Lächeln-Dauer (s):")
+        self._entry("t_post", timing.get("post_photo_pause", 2.0), f, "Pause nach Foto (s):")
+        self._entry("t_flash", timing.get("flash_duration", 0.15), f, "Blitz-Dauer (s):")
+        self._combo("flash_enabled", [("Ja", True), ("Nein", False)],
+                    cfg.get("flash_enabled", True), f, "Blitz-LED aktiv:")
+
+        # --- Darstellung ---
+        _, f = self._scroll_form()
+        self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"), f,
+                    "Ladebalken-Farbe (#RRGGBB):")
+        self._entry("screen_width", cfg.get("screen_width", 1920), f, "Bildschirmbreite:")
+        self._entry("screen_height", cfg.get("screen_height", 1080), f, "Bildschirmhöhe:")
+
+        # --- Gerät ---
+        _, f = self._scroll_form()
+        pins = cfg.get("gpio", {})
+        self._entry("gpio_pin_start_button", pins.get("pin_start_button", 17), f, "GPIO Start-Button:")
+        self._entry("gpio_pin_admin_button", pins.get("pin_admin_button", 27), f, "GPIO Admin-Button:")
+        self._entry("gpio_pin_led_flash", pins.get("pin_led_flash", 22), f, "GPIO Flash-LED:")
+        self._entry("gpio_pin_led_ready", pins.get("pin_led_ready", 23), f, "GPIO Ready-LED:")
+        self._entry("printer_name", cfg.get("printer_name", "SELPHY"), f, "CUPS-Druckername:")
+        self._entry("usb_mount", cfg.get("usb_mount", "/media/usb"), f, "USB-Mount-Pfad:")
+        self._combo("demo_mode", [("Aus", False), ("Ein", True)],
+                    cfg.get("demo_mode", False), f, "Demo-Modus (kein Drucker):")
+        cam_btn = QPushButton("Kamera testen")
+        cam_btn.setStyleSheet(_BTN)
+        cam_btn.clicked.connect(lambda: self.app.switch_screen("camera_test"))
+        f.addRow("", cam_btn)
+
+        # --- Sicherung ---
+        _, f = self._scroll_form()
+        f.addRow(QLabel("Konfiguration exportieren/importieren:"))
+        exp = QPushButton("Konfiguration exportieren")
+        exp.setStyleSheet(_BTN)
+        exp.clicked.connect(self._export_config)
+        imp = QPushButton("Konfiguration importieren")
+        imp.setStyleSheet(_BTN)
+        imp.clicked.connect(self._import_config)
+        f.addRow("", exp)
+        f.addRow("", imp)
+
+    def _show_tab(self, idx: int):
+        for i, b in self._tab_btns.items():
+            b.setChecked(i == idx)
+        self._stack.setCurrentIndex(idx)
+
+    def refresh(self):
+        # Rebuild fields from current config (e.g. after import).
+        pass
 
     # ------------------------------------------------------------------
-    # Tab: Aufnahme
-    # ------------------------------------------------------------------
 
-    def _build_aufnahme(self, cfg: dict):
-        tab     = "Aufnahme"
-        timing  = cfg.get("capture_timing", {})
-        sounds  = cfg.get("system_sounds", {})
-        x, y    = _CONT_X, _CONT_Y
-
-        # Capture overlay PNG
-        self._lbl("Kamera-Overlay (PNG mit Transparenz, über Live-Bild):", x, y, tab, _CONT_W); y += 30
-        self._entry_browse("capture_overlay", "capture_overlay",
-                           cfg.get("capture_overlay", ""), x, y, tab); y += 56
-
-        # Shutter click sound
-        self._lbl("Auslöserton (Klick-Sound):", x, y, tab, _CONT_W); y += 30
-        self._entry_browse("shutter_click", "shutter_click",
-                           sounds.get("shutter_click", ""), x, y, tab); y += 56
-
-        # Smile text
-        self._lbl("Text nach Countdown (leer = kein Text):", x, y, tab, _CONT_W); y += 30
-        self._entry("smile_text", timing.get("smile_text", "Lächeln!"), x, y, tab, 400); y += 56
-
-        # Smile enabled
-        self._lbl("Text anzeigen:", x, y, tab, 300); y += 30
-        self._dropdown("smile_enabled",
-                       ["Ja", "Nein"],
-                       "Ja" if timing.get("smile_enabled", True) else "Nein",
-                       x, y, tab, 200); y += 56
-
-        # Camera test button
-        self._lbl("Kamera testen (Live-Vorschau + Testfoto):", x, y, tab, _CONT_W); y += 30
-        btn = self._reg(pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x, y, 280, 48),
-            text="🎥  Kamera testen", manager=self._mgr,
-        ), tab)
-        self._fields["camera_test_btn"] = btn
-
-    # ------------------------------------------------------------------
-    # Tab: Darstellung
-    # ------------------------------------------------------------------
-
-    def _build_darstellung(self, cfg: dict):
-        tab  = "Darstellung"
-        x, y = _CONT_X, _CONT_Y
-
-        self._lbl("Ladebalken anzeigen:", x, y, tab, 360); y += 30
-        self._dropdown("progress_bar_enabled",
-                       ["Ja", "Nein"],
-                       "Ja" if cfg.get("progress_bar_enabled", True) else "Nein",
-                       x, y, tab, 200)
-        y += 52
-        self._lbl("Ladebalken-Farbe (Hex, z. B. #FF6600):", x, y, tab, 400); y += 30
-        self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"),
-                    x, y, tab, 200)
-
-    # ------------------------------------------------------------------
-    # Tab: Gerät
-    # ------------------------------------------------------------------
-
-    def _build_geraet(self, cfg: dict):
-        tab      = "Gerät"
-        gpio     = cfg.get("gpio", {})
-        x, y     = _CONT_X, _CONT_Y
-        col2_x   = x + 640
-
-        # Left side: demo, flash, printer, USB
-        self._lbl("Demo-Modus (Druck simuliert):", x, y, tab, 580); y += 30
-        self._dropdown("demo_mode", ["Aus", "Ein"],
-                       "Ein" if cfg.get("demo_mode", False) else "Aus",
-                       x, y, tab, 200); y += 52
-
-        self._lbl("Blitz-LED aktiv:", x, y, tab, 580); y += 30
-        self._dropdown("flash_enabled", ["Ja", "Nein"],
-                       "Ja" if cfg.get("flash_enabled", True) else "Nein",
-                       x, y, tab, 200); y += 52
-
-        self._lbl("CUPS-Druckername:", x, y, tab, 580); y += 30
-        self._entry("printer_name", cfg.get("printer_name", "SELPHY"), x, y, tab, 320); y += 52
-
-        self._lbl("USB-Mount-Pfad:", x, y, tab, 580); y += 30
-        self._entry("usb_mount", cfg.get("usb_mount", "/media/usb"), x, y, tab, 380)
-
-        # Right side: GPIO pins (2×2 grid)
-        gy = _CONT_Y
-        pin_pairs = [
-            ("pin_start_button", "Start-Button"),
-            ("pin_admin_button", "Admin-Button"),
-            ("pin_led_flash",    "Flash-LED"),
-            ("pin_led_ready",    "Ready-LED"),
-        ]
-        self._lbl("GPIO-Pins:", col2_x, gy, tab, 400); gy += 34
-        col_w = 280
-        for i, (key, label_text) in enumerate(pin_pairs):
-            px = col2_x + (i % 2) * col_w
-            py = gy + (i // 2) * 72
-            self._lbl(f"{label_text}:", px, py, tab, col_w - _PIN_W - 10)
-            self._entry(f"gpio_{key}", gpio.get(key, 0), px, py + 28, tab, _PIN_W)
-
-    # ------------------------------------------------------------------
-    # Tab: Sicherung
-    # ------------------------------------------------------------------
-
-    def _build_sicherung(self):
-        tab  = "Sicherung"
-        x, y = _CONT_X, _CONT_Y
-
-        # Export section
-        self._lbl("Konfiguration sichern (Einstellungen + Szenen + Pfade):",
-                  x, y, tab, _CONT_W); y += 34
-        self._lbl("Name für den Export:", x, y, tab, 300); y += 30
-        self._entry("export_name", "", x, y, tab, 440); y += 52
-        export_btn = self._reg(pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x, y, 220, 44),
-            text="📤  Exportieren", manager=self._mgr,
-        ), tab)
-        self._fields["export_btn"] = export_btn; y += 70
-
-        # Import section
-        self._lbl("Gespeicherte Konfiguration wiederherstellen:", x, y, tab, _CONT_W); y += 34
-        configs    = self._get_available_configs()
-        dd_w       = min(500, _CONT_W - 220)
-        import_dd  = self._reg(pygame_gui.elements.UIDropDownMenu(
-            options_list=configs, starting_option=configs[0],
-            relative_rect=pygame.Rect(x, y, dd_w, 44),
-            manager=self._mgr,
-        ), tab)
-        self._fields["import_dd"] = import_dd
-        import_btn = self._reg(pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x + dd_w + 10, y + 2, 200, 40),
-            text="📥  Importieren", manager=self._mgr,
-        ), tab)
-        self._fields["import_btn"] = import_btn
-
-    # ------------------------------------------------------------------
-    # File dialog
-    # ------------------------------------------------------------------
-
-    def _open_dialog(self, target: str):
-        if self._file_dialog:
-            try: self._file_dialog.kill()
-            except Exception: pass
-            self._file_dialog = None
-
-        self._file_dialog_target = target
-
-        if target == "bg_file":
-            bg_dd    = self._fields.get("bg_type")
-            is_video = hasattr(bg_dd, "selected_option") and bg_dd.selected_option == "Video-Loop"
-            ftype    = "video" if is_video else "image"
-        elif target.startswith("cover_"):
-            ftype = "cover_png"
-        elif target == "capture_overlay":
-            ftype = "png_overlay"
-        elif target == "shutter_click":
-            ftype = "sound"
-        else:
-            ftype = "image"
-
-        start_dir = _PROJECT_ROOT / _ASSET_DIR.get(ftype, "assets")
-        if not start_dir.exists():
-            start_dir = _PROJECT_ROOT
-
-        self._file_dialog = open_file_dialog(
-            manager=self._mgr,
-            initial_path=start_dir,
-            extensions=_EXT.get(ftype),
-        )
-
-    def _on_file_picked(self, raw_path: str):
-        picked = Path(raw_path)
-        try:
-            rel = str(picked.relative_to(_PROJECT_ROOT))
-        except ValueError:
-            rel = raw_path
-
-        target = self._file_dialog_target
-        if not target:
-            return
-
-        if target == "bg_file":
-            w = self._fields.get("bg_file")
-        elif target.startswith("cover_"):
-            w = self._fields.get(target)
-        elif target == "capture_overlay":
-            w = self._fields.get("capture_overlay")
-        elif target == "shutter_click":
-            w = self._fields.get("shutter_click")
-        else:
-            return
-
-        if w:
-            w.set_text(rel)
-
-    def _open_camera_test(self):
-        from ...constants import SCREEN_TRANSITION
-        pygame.event.post(pygame.event.Event(SCREEN_TRANSITION, {"target": "camera_test"}))
-
-    # ------------------------------------------------------------------
-    # Config export / import
-    # ------------------------------------------------------------------
-
-    def _get_available_configs(self) -> list:
-        konfig_dir = _PROJECT_ROOT / "assets" / "konfigurationen"
-        if konfig_dir.exists():
-            dirs = sorted(d.name for d in konfig_dir.iterdir() if d.is_dir())
-        else:
-            dirs = []
-        return dirs if dirs else ["(keine vorhanden)"]
-
-    def _export_config(self):
-        import shutil
-        from datetime import datetime
-
-        # Use custom name from text entry, fall back to timestamp
-        name_entry = self._fields.get("export_name")
-        custom_name = ""
-        if isinstance(name_entry, pygame_gui.elements.UITextEntryLine):
-            raw = name_entry.get_text().strip()
-            # Sanitise: remove characters invalid in directory names
-            custom_name = "".join(c if c not in r'\/:*?"<>|' else "_" for c in raw)
-
-        folder_name = custom_name or datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_dir  = _PROJECT_ROOT / "assets" / "konfigurationen" / folder_name
-        export_dir.mkdir(parents=True, exist_ok=True)
-
-        config_dir = _PROJECT_ROOT / "config"
-        copied = []
-        for fname in ("settings.json", "scenes.json", "paths.json"):
-            src = config_dir / fname
-            if src.exists():
-                shutil.copy2(src, export_dir / fname)
-                copied.append(fname)
-
-        if copied:
-            self._status_msg = f"Exportiert als '{folder_name}'"
-            self._status_ok  = True
-            import logging
-            logging.getLogger(__name__).info("Config exported to %s", export_dir)
-        else:
-            self._status_msg = "Export fehlgeschlagen – keine Konfigurationsdateien gefunden."
-            self._status_ok  = False
-
-        # Rebuild Sicherung tab so the import dropdown shows the new entry
-        for w in self._tab_content.get("Sicherung", []):
-            try: w.kill()
-            except Exception: pass
-        self._tab_content["Sicherung"] = []
-        for key in ("export_btn", "import_dd", "import_btn", "export_name"):
-            self._fields.pop(key, None)
-        self._build_sicherung()
-        if self._active_tab != "Sicherung":
-            for w in self._tab_content["Sicherung"]:
-                try: w.hide()
-                except Exception: pass
-
-    def _import_config(self, config_name: str):
-        import shutil
-        if config_name in ("(keine vorhanden)", ""):
-            self._status_msg = "Keine Konfiguration ausgewählt."
-            self._status_ok  = False
-            return
-
-        src_dir    = _PROJECT_ROOT / "assets" / "konfigurationen" / config_name
-        config_dir = _PROJECT_ROOT / "config"
-
-        if not src_dir.exists():
-            self._status_msg = f"Ordner nicht gefunden: {config_name}"
-            self._status_ok  = False
-            return
-
-        imported = []
-        for fname in ("settings.json", "scenes.json", "paths.json"):
-            src = src_dir / fname
-            if src.exists():
-                shutil.copy2(src, config_dir / fname)
-                imported.append(fname)
-
-        if not imported:
-            self._status_msg = f"Keine Dateien in '{config_name}' gefunden."
-            self._status_ok  = False
-            return
-
-        self.app.config.reload()
-        self._status_msg = f"Importiert: '{config_name}'"
-        self._status_ok  = True
-        import logging
-        logging.getLogger(__name__).info("Config imported from %s", src_dir)
-
-        # Defer rebuild to next update() tick — killing widgets mid-event crashes pygame_gui
-        self._rebuild_pending = True
-
-    # ------------------------------------------------------------------
-    # Save
-    # ------------------------------------------------------------------
+    def _get(self, key: str, cast=str):
+        w = self._fields.get(key)
+        if isinstance(w, QLineEdit):
+            try:
+                return cast(w.text().strip())
+            except (ValueError, AttributeError):
+                return None
+        if isinstance(w, QComboBox):
+            return w.currentData()
+        return None
 
     def _save(self):
-        self._status_msg = ""
         cfg = self.app.config.settings
 
-        def get_text(key: str, cast=str):
-            w = self._fields.get(key)
-            if isinstance(w, pygame_gui.elements.UITextEntryLine):
-                try:
-                    return cast(w.get_text().strip())
-                except (ValueError, AttributeError):
-                    return None
-            return None
+        cfg.setdefault("idle_background", {})
+        cfg["idle_background"]["type"] = self._get("bg_type") or "image"
+        cfg["idle_background"]["file"] = self._get("bg_file") or ""
 
-        def get_dd(key: str) -> str | None:
-            w = self._fields.get(key)
-            return getattr(w, "selected_option", None) if w else None
-
-        # Background
-        bg_type_sel = get_dd("bg_type")
-        cfg["idle_background"] = {
-            "type": "video" if bg_type_sel == "Video-Loop" else "image",
-            "file": get_text("bg_file") or "",
-        }
-
-        # Collage covers – validate PNG size and existence
         covers = cfg.setdefault("collage_covers", {})
-        errors = []
         for n in range(1, 5):
-            path_str = get_text(f"cover_{n}") or ""
-            if path_str:
-                p = _PROJECT_ROOT / path_str
-                if not p.exists():
-                    errors.append(f"Overlay {n}: Datei nicht gefunden ({path_str})")
-                    continue
-                try:
-                    img = Image.open(p)
-                    if img.size != (COLLAGE_W, COLLAGE_H):
-                        errors.append(
-                            f"Overlay {n}: Bild ist {img.size[0]}×{img.size[1]} px "
-                            f"(erwartet {COLLAGE_W}×{COLLAGE_H} px)"
-                        )
-                        continue
-                except Exception as e:
-                    errors.append(f"Overlay {n}: Fehler beim Lesen ({e})")
-                    continue
-            covers[str(n)] = path_str
+            covers[str(n)] = self._get(f"cover_{n}") or ""
+            self._validate_cover_size(covers[str(n)], n)
 
-        # Display settings
-        bar_sel = get_dd("progress_bar_enabled")
-        if bar_sel is not None:
-            cfg["progress_bar_enabled"] = bar_sel == "Ja"
-        cfg["loading_bar_color"] = get_text("loading_bar_color") or "#FF6600"
+        sounds = cfg.setdefault("system_sounds", {})
+        sounds["shutter_click"] = self._get("shutter_click") or ""
+        sounds["countdown_beep"] = self._get("countdown_beep") or ""
 
-        # Operation
-        demo_sel  = get_dd("demo_mode")
-        flash_sel = get_dd("flash_enabled")
-        if demo_sel  is not None: cfg["demo_mode"]     = demo_sel  == "Ein"
-        if flash_sel is not None: cfg["flash_enabled"] = flash_sel == "Ja"
-        cfg["printer_name"] = get_text("printer_name") or "SELPHY"
-        cfg["usb_mount"]    = get_text("usb_mount")    or "/media/usb"
-
-        # GPIO pins
-        gpio = cfg.setdefault("gpio", {})
-        for key in ("pin_start_button", "pin_admin_button", "pin_led_flash", "pin_led_ready"):
-            val = get_text(f"gpio_{key}", int)
-            if val is not None:
-                gpio[key] = val
-
-        # Capture overlay
-        cfg["capture_overlay"] = get_text("capture_overlay") or ""
-
-        # Shutter click sound
-        cfg.setdefault("system_sounds", {})["shutter_click"] = get_text("shutter_click") or ""
-
-        # Smile settings
         timing = cfg.setdefault("capture_timing", {})
-        smile_text_val = get_text("smile_text")
-        if smile_text_val is not None:
-            timing["smile_text"] = smile_text_val
-        smile_sel = get_dd("smile_enabled")
-        if smile_sel is not None:
-            timing["smile_enabled"] = smile_sel == "Ja"
+        timing["initial_preview_seconds"] = self._get("t_preview", float) or 2.0
+        timing["countdown_from"] = self._get("t_countdown", int) or 3
+        timing["smile_duration"] = self._get("t_smile", float) or 0.8
+        timing["post_photo_pause"] = self._get("t_post", float) or 2.0
+        timing["flash_duration"] = self._get("t_flash", float) or 0.15
+        cfg["flash_enabled"] = bool(self._get("flash_enabled"))
+
+        cfg["loading_bar_color"] = self._get("loading_bar_color") or "#FF6600"
+        sw = self._get("screen_width", int)
+        sh = self._get("screen_height", int)
+        if sw:
+            cfg["screen_width"] = sw
+        if sh:
+            cfg["screen_height"] = sh
+
+        pins = cfg.setdefault("gpio", {})
+        for key in ("pin_start_button", "pin_admin_button", "pin_led_flash", "pin_led_ready"):
+            val = self._get(f"gpio_{key}", int)
+            if val is not None:
+                pins[key] = val
+        cfg["printer_name"] = self._get("printer_name") or "SELPHY"
+        cfg["usb_mount"] = self._get("usb_mount") or "/media/usb"
+        cfg["demo_mode"] = bool(self._get("demo_mode"))
 
         self.app.config.save_settings()
 
-        if errors:
-            self._status_msg = "Gespeichert – aber: " + " | ".join(errors)
-            self._status_ok  = False
-        else:
-            self._status_msg = "Einstellungen gespeichert."
-            self._status_ok  = True
+        # Warn if a system sound is not WAV.
+        for key, label in (("shutter_click", "Auslöser-Ton"), ("countdown_beep", "Countdown-Ton")):
+            val = sounds.get(key, "")
+            if val and Path(val).suffix.lower() != ".wav":
+                self.app.show_notification(
+                    f"{label}: '{val}' ist kein WAV – Systemtöne benötigen WAV-Format.",
+                    duration=8.0, level="warning")
+
+        self.app.show_notification("Einstellungen gespeichert.", duration=3.0, level="info")
+
+    def _validate_cover_size(self, rel: str, count: int):
+        if not rel:
+            return
+        p = self.app.config.resolve_asset(rel)
+        if not p.exists():
+            return
+        try:
+            img = Image.open(p)
+            if img.size != (COLLAGE_W, COLLAGE_H):
+                self.app.show_notification(
+                    f"Overlay {count}: muss {COLLAGE_W}×{COLLAGE_H} px sein "
+                    f"(ist {img.size[0]}×{img.size[1]}).",
+                    duration=8.0, level="warning")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+
+    def _export_config(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Konfiguration exportieren", str(Path.home() / "fotobox_config.json"),
+            "JSON (*.json)")
+        if not path:
+            return
+        data = {
+            "settings": self.app.config.settings,
+            "scenes": self.app.config.scenes,
+            "paths": self.app.config.paths,
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2, ensure_ascii=False)
+            self.app.show_notification("Konfiguration exportiert.", duration=4.0, level="info")
+        except OSError as e:
+            self.app.show_notification(f"Export fehlgeschlagen: {e}", duration=6.0, level="error")
+
+    def _import_config(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Konfiguration importieren", str(Path.home()), "JSON (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if "settings" in data:
+                self.app.config.settings = data["settings"]
+                self.app.config.save_settings()
+            if "scenes" in data:
+                self.app.config.scenes = data["scenes"]
+                self.app.config.save_scenes()
+            if "paths" in data:
+                self.app.config.paths = data["paths"]
+                self.app.config.save_paths()
+            self.app.show_notification(
+                "Konfiguration importiert. Bitte App neu starten.",
+                duration=8.0, level="info")
+        except (OSError, json.JSONDecodeError) as e:
+            self.app.show_notification(f"Import fehlgeschlagen: {e}", duration=6.0, level="error")

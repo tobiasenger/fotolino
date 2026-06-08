@@ -1,607 +1,311 @@
 """
-Admin Scenes tab.
-Three sub-tabs (Begrüßung / Collage / Druck) with a scene list and create/edit/delete editor.
-- Media type toggle dynamically shows/hides photo vs. video fields.
-- Browse buttons open a UIFileDialog for each file input.
-- Duration is validated against per-type limits.
-- Dependency check on delete.
+Admin Scenes tab (PyQt6).
+Sub-tab bar (Begrüßung / Collage / Druck), scene list, and an editor form with
+file-browse buttons (QFileDialog) and media-format validation.
+
+Scene audio uses VLC → WAV + MP3 + OGG allowed.
+Scene video uses VLC → MP4 + AVI + MOV allowed.
+Duration is derived from the media file and validated against per-type limits.
 """
 from __future__ import annotations
 from pathlib import Path
 
-import pygame
-import pygame_gui
+from PyQt6.QtWidgets import (
+    QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLabel, QLineEdit,
+    QComboBox, QPushButton, QListWidget, QListWidgetItem, QScrollArea, QMessageBox,
+)
+from PyQt6.QtCore import Qt
 
 from ...constants import (
-    SCREEN_W, SCREEN_H, ADMIN_PANEL,
     SCENE_GREETING_MIN, SCENE_GREETING_MAX,
     SCENE_COLLAGE_DURATION, SCENE_PRINT_DURATION,
 )
-from ..base_screen import get_font
+from ...audio import AudioPlayer
 from .file_dialog import open_file_dialog
 
-# Project root – four parents up from this file (src/ui/admin/admin_scenes.py)
-_PROJECT_ROOT = Path(__file__).parents[3]
-
-_TOP       = 70
-_MARGIN    = 20
-_LIST_W    = 440
-_PANEL_X   = _LIST_W + _MARGIN * 2
-_PANEL_W   = SCREEN_W - _PANEL_X - _MARGIN
-_CONTENT_H = SCREEN_H - _TOP - _MARGIN
-
-_SCENE_TYPES  = ["greeting", "collage", "print"]
+_SCENE_TYPES = ["greeting", "collage", "print"]
 _SCENE_LABELS = {"greeting": "Begrüßung", "collage": "Collage", "print": "Druck"}
-
 _DURATION_LIMITS = {
     "greeting": (SCENE_GREETING_MIN, SCENE_GREETING_MAX),
     "collage":  (1, SCENE_COLLAGE_DURATION),
     "print":    (1, SCENE_PRINT_DURATION),
 }
 
-# Allowed file extensions per field type
-_EXT = {
-    "image": {".jpg", ".jpeg", ".png"},
-    "audio": {".mp3", ".wav"},
-    "video": {".mp4", ".avi", ".mov"},
-}
+_AUDIO_EXTS = {".wav", ".mp3", ".ogg"}
+_VIDEO_EXTS = {".mp4", ".avi", ".mov"}
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
-# Default start directory for file dialog per field type
-_ASSET_DIRS = {
-    "image": "assets/images",
-    "audio": "assets/sounds",
-    "video": "assets/videos",
-}
+_BTN = (
+    "QPushButton { background: #2a2a50; color: white; border: 1px solid #444488; "
+    "border-radius: 5px; padding: 8px 14px; } QPushButton:hover { border-color: #ff6600; }"
+)
+_DEL = (
+    "QPushButton { background: #5a2030; color: white; border: 1px solid #884444; "
+    "border-radius: 5px; padding: 8px 14px; } QPushButton:hover { border-color: #ff6600; }"
+)
 
 
-class AdminScenes:
-    def __init__(self, app, manager: pygame_gui.UIManager):
-        self.app          = app
-        self._mgr         = manager
-        self._active      = False
+class AdminScenes(QWidget):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
         self._active_type = "greeting"
-
-        self._type_btns:  dict = {}
-        self._scene_btns: dict = {}
-        self._list_widgets:   list = []
-        self._editor_widgets: list = []
         self._editing_id: str | None = None
 
-        # Confirm-delete state
-        self._confirm_widgets: list = []
-        self._pending_delete: str | None = None
+        root = QHBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(16)
 
-        # File dialog state
-        self._file_dialog = None
-        self._file_dialog_target: str | None = None  # 'image' | 'audio' | 'video'
+        # ---- Left ----
+        left = QVBoxLayout()
+        tab_row = QHBoxLayout()
+        self._type_btns = {}
+        for key in _SCENE_TYPES:
+            b = QPushButton(_SCENE_LABELS[key])
+            b.setCheckable(True)
+            b.setStyleSheet(
+                "QPushButton { background: #2a2a50; color: white; border: none; "
+                "border-radius: 5px; padding: 8px; } QPushButton:checked { background: #ff6600; }")
+            b.clicked.connect(lambda _, k=key: self._switch_type(k))
+            tab_row.addWidget(b)
+            self._type_btns[key] = b
+        left.addLayout(tab_row)
 
-        # Dynamic field groups (show/hide on media type change)
-        self._photo_group: list = []   # image + audio labels, entries, buttons
-        self._video_group: list = []   # video label, entry, button
+        self._list = QListWidget()
+        self._list.itemClicked.connect(self._on_select)
+        left.addWidget(self._list, 1)
 
-        # Entry widgets (needed in _save_editor and file dialog callback)
-        self._e_name    = None
-        self._e_type    = None
-        self._e_media   = None
-        self._e_image   = None
-        self._e_audio   = None
-        self._e_video   = None
-        self._browse_image: pygame_gui.elements.UIButton | None = None
-        self._browse_audio: pygame_gui.elements.UIButton | None = None
-        self._browse_video: pygame_gui.elements.UIButton | None = None
-        self._e_duration   = None
-        self._is_photo     = True   # tracks current media type selection
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("+ Neue Szene")
+        add_btn.setStyleSheet(_BTN)
+        add_btn.clicked.connect(self._new_scene)
+        del_btn = QPushButton("Löschen")
+        del_btn.setStyleSheet(_DEL)
+        del_btn.clicked.connect(self._delete_selected)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(del_btn)
+        left.addLayout(btn_row)
 
-        self._error_msg = ""
+        left_w = QWidget()
+        left_w.setLayout(left)
+        left_w.setFixedWidth(440)
+        root.addWidget(left_w)
+
+        # ---- Right: editor ----
+        self._editor = QScrollArea()
+        self._editor.setWidgetResizable(True)
+        self._editor_inner = QWidget()
+        self._form = QFormLayout(self._editor_inner)
+        self._editor.setWidget(self._editor_inner)
+        root.addWidget(self._editor, 1)
+
+        self._build_form()
+        self._set_editor_enabled(False)
 
     # ------------------------------------------------------------------
-    # Public interface
+
+    def _build_form(self):
+        self._name = QLineEdit()
+
+        self._type = QComboBox()
+        for key in _SCENE_TYPES:
+            self._type.addItem(_SCENE_LABELS[key], key)
+
+        self._media = QComboBox()
+        self._media.addItem("Foto + Ton", "photo")
+        self._media.addItem("Video", "video")
+        self._media.currentIndexChanged.connect(self._update_field_visibility)
+
+        # Image row
+        self._image = QLineEdit()
+        img_browse = QPushButton("…")
+        img_browse.setStyleSheet(_BTN)
+        img_browse.clicked.connect(lambda: self._browse(self._image, _IMAGE_EXTS, "Bild", self._image_warn))
+        self._image_warn = QLabel("")
+        self._image_warn.setStyleSheet("color: #ff6060;")
+        self._image_row = self._make_row(self._image, img_browse)
+
+        # Audio row
+        self._audio = QLineEdit()
+        aud_browse = QPushButton("…")
+        aud_browse.setStyleSheet(_BTN)
+        aud_browse.clicked.connect(lambda: self._browse(self._audio, _AUDIO_EXTS, "Audio", self._audio_warn))
+        self._audio_warn = QLabel("")
+        self._audio_warn.setStyleSheet("color: #ff6060;")
+        self._audio_row = self._make_row(self._audio, aud_browse)
+
+        # Video row
+        self._video = QLineEdit()
+        vid_browse = QPushButton("…")
+        vid_browse.setStyleSheet(_BTN)
+        vid_browse.clicked.connect(lambda: self._browse(self._video, _VIDEO_EXTS, "Video", self._video_warn))
+        self._video_warn = QLabel("")
+        self._video_warn.setStyleSheet("color: #ff6060;")
+        self._video_row = self._make_row(self._video, vid_browse)
+
+        self._form.addRow("Name:", self._name)
+        self._form.addRow("Szenentyp:", self._type)
+        self._form.addRow("Medientyp:", self._media)
+        self._lbl_image = QLabel("Bilddatei (.jpg/.png):")
+        self._form.addRow(self._lbl_image, self._image_row)
+        self._form.addRow("", self._image_warn)
+        self._lbl_audio = QLabel("Audiodatei (.wav/.mp3/.ogg):")
+        self._form.addRow(self._lbl_audio, self._audio_row)
+        self._form.addRow("", self._audio_warn)
+        self._lbl_video = QLabel("Videodatei (.mp4/.avi/.mov):")
+        self._form.addRow(self._lbl_video, self._video_row)
+        self._form.addRow("", self._video_warn)
+
+        self._info = QLabel("→ Pfad relativ zu Projektordner, z.B. assets/sounds/welcome.mp3.\n"
+                            "Dauer wird automatisch aus der Mediendatei berechnet.")
+        self._info.setWordWrap(True)
+        self._form.addRow(self._info)
+
+        save = QPushButton("Speichern")
+        save.setStyleSheet(_BTN)
+        save.clicked.connect(self._save)
+        self._form.addRow("", save)
+
+    @staticmethod
+    def _make_row(line: QLineEdit, browse: QPushButton) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(line, 1)
+        lay.addWidget(browse)
+        return w
+
+    def _set_row_visible(self, label: QLabel, row: QWidget, warn: QLabel, visible: bool):
+        label.setVisible(visible)
+        row.setVisible(visible)
+        warn.setVisible(visible)
+
+    def _update_field_visibility(self):
+        is_photo = self._media.currentData() == "photo"
+        self._set_row_visible(self._lbl_image, self._image_row, self._image_warn, is_photo)
+        self._set_row_visible(self._lbl_audio, self._audio_row, self._audio_warn, is_photo)
+        self._set_row_visible(self._lbl_video, self._video_row, self._video_warn, not is_photo)
+
     # ------------------------------------------------------------------
 
-    def show(self):
-        self._active = True
-        self._build_list()
-
-    def hide(self):
-        self._active = False
-        self._kill_all()
-
-    # ------------------------------------------------------------------
-    # Event handling
-    # ------------------------------------------------------------------
-
-    def handle_event(self, event: pygame.event.Event):
-        if not self._active:
+    def _browse(self, line: QLineEdit, exts: set, kind: str, warn: QLabel):
+        base = str(self.app.config.resolve_asset("assets"))
+        sel = open_file_dialog(self, base, f"{kind} auswählen", exts)
+        if not sel:
             return
+        # Store path relative to project root when possible.
+        try:
+            rel = Path(sel).resolve().relative_to(
+                self.app.config.resolve_asset("").resolve())
+            line.setText(str(rel))
+        except (ValueError, Exception):
+            line.setText(sel)
+        self._validate_ext(sel, exts, kind, warn)
 
-        # ── File dialog result ──────────────────────────────────────────
-        if event.type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
-            picked = Path(event.text)
-            try:
-                rel = str(picked.relative_to(_PROJECT_ROOT))
-            except ValueError:
-                rel = str(picked)
-
-            target = self._file_dialog_target
-            if target == "image" and self._e_image:
-                self._e_image.set_text(rel)
-            elif target == "audio" and self._e_audio:
-                self._e_audio.set_text(rel)
-                # Auto-fill duration from MP3
-                if self._e_duration:
-                    from ...audio import AudioPlayer
-                    dur = AudioPlayer.get_mp3_duration(picked)
-                    if dur:
-                        self._e_duration.set_text(str(round(dur, 1)))
-            elif target == "video" and self._e_video:
-                self._e_video.set_text(rel)
-                # Auto-fill duration from video
-                if self._e_duration:
-                    from ...audio import AudioPlayer
-                    dur = AudioPlayer.get_video_duration(picked)
-                    if dur:
-                        self._e_duration.set_text(str(round(dur, 1)))
-
-            self._file_dialog = None
-            self._file_dialog_target = None
-            return
-
-        # ── Media type dropdown changed → toggle field visibility ───────
-        if event.type == pygame_gui.UI_DROP_DOWN_MENU_CHANGED:
-            if self._e_media and event.ui_element == self._e_media:
-                self._is_photo = (event.text == "Foto + Ton")
-                self._update_media_visibility(self._is_photo)
-                return
-
-        if event.type != pygame_gui.UI_BUTTON_PRESSED:
-            return
-        el = event.ui_element
-
-        # ── Sub-tab buttons ─────────────────────────────────────────────
-        for k, btn in self._type_btns.items():
-            if el == btn:
-                self._active_type = k
-                self._build_list()
-                self._clear_editor()
-                return
-
-        # ── Add new scene ───────────────────────────────────────────────
-        if el == self._add_btn:
-            self._open_editor(None)
-            return
-
-        # ── Scene list edit / delete ────────────────────────────────────
-        for sid, (ebtn, dbtn) in list(self._scene_btns.items()):
-            if el == ebtn:
-                scene = self.app.config.get_scene_by_id(sid)
-                if scene:
-                    self._open_editor(scene)
-                return
-            if el == dbtn:
-                self._confirm_delete(sid)
-                return
-
-        # ── Editor buttons ──────────────────────────────────────────────
-        if hasattr(self, "_save_btn")   and el == self._save_btn:
-            self._save_editor(); return
-        if hasattr(self, "_cancel_btn") and el == self._cancel_btn:
-            self._clear_editor(); return
-
-        # ── Browse buttons ──────────────────────────────────────────────
-        if self._browse_image and el == self._browse_image:
-            self._open_file_dialog("image"); return
-        if self._browse_audio and el == self._browse_audio:
-            self._open_file_dialog("audio"); return
-        if self._browse_video and el == self._browse_video:
-            self._open_file_dialog("video"); return
-
-        # ── Confirm-delete buttons ──────────────────────────────────────
-        if hasattr(self, "_confirm_yes") and el == self._confirm_yes:
-            self._do_delete(self._pending_delete)
-            self._kill_confirm(); return
-        if hasattr(self, "_confirm_no") and el == self._confirm_no:
-            self._kill_confirm(); return
-
-    def update(self, dt: float):
-        pass
-
-    def draw(self, surface: pygame.Surface):
-        if not self._active:
-            return
-        pygame.draw.rect(surface, ADMIN_PANEL,
-                         (_MARGIN, _TOP, _LIST_W, _CONTENT_H), border_radius=8)
-        if self._editing_id is not None:
-            pygame.draw.rect(surface, ADMIN_PANEL,
-                             (_PANEL_X, _TOP, _PANEL_W, _CONTENT_H), border_radius=8)
-        if self._error_msg:
-            font = get_font(22)
-            surf = font.render(self._error_msg, True, (220, 60, 60))
-            surface.blit(surf, (_PANEL_X + 20, SCREEN_H - 60))
+    @staticmethod
+    def _validate_ext(path: str, exts: set, kind: str, warn: QLabel):
+        if path and Path(path).suffix.lower() not in exts:
+            allowed = ", ".join(sorted(exts))
+            warn.setText(f"Warnung: {kind} sollte eines dieser Formate sein: {allowed}")
+        else:
+            warn.setText("")
 
     # ------------------------------------------------------------------
-    # List
-    # ------------------------------------------------------------------
 
-    def _kill_all(self):
-        for w in self._list_widgets:
-            try: w.kill()
-            except Exception: pass
-        self._list_widgets.clear()
-        for ebtn, dbtn in self._scene_btns.values():
-            try: ebtn.kill()
-            except Exception: pass
-            try: dbtn.kill()
-            except Exception: pass
-        self._scene_btns.clear()
-        for b in self._type_btns.values():
-            try: b.kill()
-            except Exception: pass
-        self._type_btns.clear()
-        self._kill_editor()
-        self._kill_confirm()
+    def refresh(self):
+        for k, b in self._type_btns.items():
+            b.setChecked(k == self._active_type)
+        self._reload_list()
+        self._editing_id = None
+        self._set_editor_enabled(False)
 
-    def _build_list(self):
-        for w in self._list_widgets:
-            try: w.kill()
-            except Exception: pass
-        self._list_widgets.clear()
-        for ebtn, dbtn in self._scene_btns.values():
-            try: ebtn.kill()
-            except Exception: pass
-            try: dbtn.kill()
-            except Exception: pass
-        self._scene_btns.clear()
-        for b in self._type_btns.values():
-            try: b.kill()
-            except Exception: pass
-        self._type_btns.clear()
+    def _switch_type(self, key: str):
+        self._active_type = key
+        self.refresh()
 
-        # Sub-tab buttons
-        tab_w = (_LIST_W - 10) // 3
-        for i, key in enumerate(_SCENE_TYPES):
-            btn = pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect(_MARGIN + 5 + i * tab_w, _TOP + 8, tab_w - 4, 36),
-                text=_SCENE_LABELS[key],
-                manager=self._mgr,
-            )
-            self._type_btns[key] = btn
-            self._list_widgets.append(btn)
-
-        self._add_btn = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(_MARGIN + _LIST_W - 160, _TOP + 52, 150, 38),
-            text="+ Neue Szene",
-            manager=self._mgr,
-        )
-        self._list_widgets.append(self._add_btn)
-
-        scenes = self.app.config.get_scenes_by_type(self._active_type)
-        y = _TOP + 100
-        for scene in scenes:
-            sid  = scene["id"]
-            name = scene.get("name", "(kein Name)")
-            dur  = scene.get("duration", 0)
-            mt   = "Foto" if scene.get("media_type") == "photo" else "Video"
-            ebtn = pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect(_MARGIN + 4, y, _LIST_W - 94, 44),
-                text=f"{name}  |  {mt}  |  {dur:.1f}s",
-                manager=self._mgr,
-            )
-            dbtn = pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect(_MARGIN + _LIST_W - 82, y, 74, 44),
-                text="Löschen",
-                manager=self._mgr,
-            )
-            self._scene_btns[sid] = (ebtn, dbtn)
-            y += 52
-            if y + 52 > _TOP + _CONTENT_H:
-                break
+    def _reload_list(self):
+        self._list.clear()
+        for s in self.app.config.get_scenes_by_type(self._active_type):
+            mt = "Foto" if s.get("media_type") == "photo" else "Video"
+            dur = s.get("duration", 0)
+            item = QListWidgetItem(f"{s.get('name', '(kein Name)')}  |  {mt}  |  {dur:.1f}s")
+            item.setData(Qt.ItemDataRole.UserRole, s["id"])
+            self._list.addItem(item)
 
     # ------------------------------------------------------------------
-    # Editor
-    # ------------------------------------------------------------------
 
-    def _kill_editor(self):
-        for w in self._editor_widgets:
-            try: w.kill()
-            except Exception: pass
-        self._editor_widgets.clear()
-        self._photo_group.clear()
-        self._video_group.clear()
-        self._editing_id     = None
-        self._browse_image   = None
-        self._browse_audio   = None
-        self._browse_video   = None
-        self._e_name = self._e_type = self._e_media = self._e_duration = None
-        self._e_image = self._e_audio = self._e_video = None
-        self._error_msg = ""
-        if self._file_dialog:
-            try: self._file_dialog.kill()
-            except Exception: pass
-            self._file_dialog = None
+    def _on_select(self, item: QListWidgetItem):
+        scene = self.app.config.get_scene_by_id(item.data(Qt.ItemDataRole.UserRole))
+        if scene:
+            self._load_into_editor(scene)
 
-    def _clear_editor(self):
-        self._kill_editor()
+    def _new_scene(self):
+        self._editing_id = "__new__"
+        self._name.setText("")
+        self._type.setCurrentIndex(_SCENE_TYPES.index(self._active_type))
+        self._media.setCurrentIndex(0)
+        self._image.setText("")
+        self._audio.setText("")
+        self._video.setText("")
+        for warn in (self._image_warn, self._audio_warn, self._video_warn):
+            warn.setText("")
+        self._update_field_visibility()
+        self._set_editor_enabled(True)
 
-    def _open_editor(self, scene: dict | None):
-        self._clear_editor()
-        self._editing_id = scene["id"] if scene else "__new__"
-        scene = scene or {}
+    def _load_into_editor(self, scene: dict):
+        self._editing_id = scene["id"]
+        self._name.setText(scene.get("name", ""))
+        ti = self._type.findData(scene.get("type", self._active_type))
+        self._type.setCurrentIndex(ti if ti >= 0 else 0)
+        self._media.setCurrentIndex(0 if scene.get("media_type", "photo") == "photo" else 1)
+        self._image.setText(scene.get("image", ""))
+        self._audio.setText(scene.get("audio", ""))
+        self._video.setText(scene.get("video", ""))
+        self._validate_ext(scene.get("image", ""), _IMAGE_EXTS, "Bild", self._image_warn)
+        self._validate_ext(scene.get("audio", ""), _AUDIO_EXTS, "Audio", self._audio_warn)
+        self._validate_ext(scene.get("video", ""), _VIDEO_EXTS, "Video", self._video_warn)
+        self._update_field_visibility()
+        self._set_editor_enabled(True)
 
-        x0 = _PANEL_X + 20
-        w  = _PANEL_W - 40
-        ENTRY_W  = w - 115   # width of text entries next to browse button
-        BROWSE_W = 108        # width of browse button
-
-        def reg(*widgets):
-            """Register widgets to be killed when editor closes."""
-            for wg in widgets:
-                self._editor_widgets.append(wg)
-            return widgets[-1] if len(widgets) == 1 else widgets
-
-        def lbl(text, yy):
-            lb = pygame_gui.elements.UILabel(
-                relative_rect=pygame.Rect(x0, yy, w, 28),
-                text=text, manager=self._mgr,
-            )
-            return reg(lb)
-
-        def entry(val, yy, width=None):
-            width = width if width is not None else w
-            e = pygame_gui.elements.UITextEntryLine(
-                relative_rect=pygame.Rect(x0, yy, width, 40),
-                manager=self._mgr,
-            )
-            e.set_text(str(val))
-            return reg(e)
-
-        def browse_btn(yy):
-            btn = pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect(x0 + ENTRY_W + 10, yy, BROWSE_W, 40),
-                text="📂 Suchen",
-                manager=self._mgr,
-            )
-            return reg(btn)
-
-        def dropdown(options, sel, yy):
-            if not options:
-                options = ["(leer)"]
-            if sel not in options:
-                sel = options[0]
-            dd = pygame_gui.elements.UIDropDownMenu(
-                options_list=options, starting_option=sel,
-                relative_rect=pygame.Rect(x0, yy, w, 44),
-                manager=self._mgr,
-            )
-            return reg(dd)
-
-        # ── Fixed fields ─────────────────────────────────────────────────
-        y = _TOP + 20
-
-        # Scene type is fixed to whichever tab is active – no dropdown needed
-        active_label = _SCENE_LABELS.get(self._active_type, self._active_type)
-        lbl(f"Szenentyp: {active_label}  (bestimmt durch aktiven Tab)", y);  y += 34
-
-        lbl("Name:", y);  y += 30
-        self._e_name = entry(scene.get("name", ""), y);  y += 52
-
-        lbl("Medientyp:", y);  y += 30
-        is_photo = scene.get("media_type", "photo") == "photo"
-        self._is_photo = is_photo   # initialise tracked state
-        self._e_media = dropdown(["Foto + Ton", "Video"],
-                                 "Foto + Ton" if is_photo else "Video", y);  y += 54
-
-        # ── Dynamic fields (photo and video groups share the same Y) ─────
-        group_y = y   # both groups start here
-
-        # Photo group: image + audio
-        lbl_img = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(x0, group_y, w, 28),
-            text="Bilddatei (.jpg / .png):", manager=self._mgr,
-        )
-        reg(lbl_img)
-        self._e_image = pygame_gui.elements.UITextEntryLine(
-            relative_rect=pygame.Rect(x0, group_y + 30, ENTRY_W, 40),
-            manager=self._mgr,
-        )
-        self._e_image.set_text(scene.get("image", ""))
-        reg(self._e_image)
-        self._browse_image = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x0 + ENTRY_W + 10, group_y + 30, BROWSE_W, 40),
-            text="📂 Suchen", manager=self._mgr,
-        )
-        reg(self._browse_image)
-
-        lbl_aud = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(x0, group_y + 80, w, 28),
-            text="Audiodatei (.mp3):", manager=self._mgr,
-        )
-        reg(lbl_aud)
-        self._e_audio = pygame_gui.elements.UITextEntryLine(
-            relative_rect=pygame.Rect(x0, group_y + 110, ENTRY_W, 40),
-            manager=self._mgr,
-        )
-        self._e_audio.set_text(scene.get("audio", ""))
-        reg(self._e_audio)
-        self._browse_audio = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x0 + ENTRY_W + 10, group_y + 110, BROWSE_W, 40),
-            text="📂 Suchen", manager=self._mgr,
-        )
-        reg(self._browse_audio)
-
-        self._photo_group = [lbl_img, self._e_image, self._browse_image,
-                             lbl_aud, self._e_audio, self._browse_audio]
-
-        # Video group: video (same starting Y as photo group)
-        lbl_vid = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(x0, group_y, w, 28),
-            text="Videodatei (.mp4 / .mov):", manager=self._mgr,
-        )
-        reg(lbl_vid)
-        self._e_video = pygame_gui.elements.UITextEntryLine(
-            relative_rect=pygame.Rect(x0, group_y + 30, ENTRY_W, 40),
-            manager=self._mgr,
-        )
-        self._e_video.set_text(scene.get("video", ""))
-        reg(self._e_video)
-        self._browse_video = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x0 + ENTRY_W + 10, group_y + 30, BROWSE_W, 40),
-            text="📂 Suchen", manager=self._mgr,
-        )
-        reg(self._browse_video)
-
-        self._video_group = [lbl_vid, self._e_video, self._browse_video]
-
-        # ── Duration entry (auto-filled from file, but manually editable) ─
-        dur_y = group_y + 165
-        lbl_dur = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(x0, dur_y, w, 28),
-            text="Dauer (Sekunden) – wird aus Datei ermittelt, kann manuell eingegeben werden:",
-            manager=self._mgr,
-        )
-        reg(lbl_dur)
-        self._e_duration = pygame_gui.elements.UITextEntryLine(
-            relative_rect=pygame.Rect(x0, dur_y + 30, 120, 40),
-            manager=self._mgr,
-        )
-        cur_dur = scene.get("duration", 0)
-        self._e_duration.set_text(str(cur_dur) if cur_dur else "")
-        reg(self._e_duration)
-
-        lbl_limits = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(x0 + 130, dur_y + 38, w - 130, 24),
-            text=f"Erlaubter Bereich für '{active_label}': "
-                 f"{_DURATION_LIMITS.get(self._active_type, (0, 0))[0]}–"
-                 f"{_DURATION_LIMITS.get(self._active_type, (0, 0))[1]} Sekunden",
-            manager=self._mgr,
-        )
-        reg(lbl_limits)
-
-        btn_y = dur_y + 80
-        self._save_btn = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x0, btn_y, 160, 44),
-            text="Speichern", manager=self._mgr,
-        )
-        self._cancel_btn = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(x0 + 170, btn_y, 130, 44),
-            text="Abbrechen", manager=self._mgr,
-        )
-        reg(self._save_btn, self._cancel_btn)
-
-        # Apply initial visibility
-        self._update_media_visibility(is_photo)
-
-    def _update_media_visibility(self, is_photo: bool):
-        """Show photo fields or video fields depending on media type selection."""
-        for w in self._photo_group:
-            try:
-                w.show() if is_photo else w.hide()
-            except Exception:
-                pass
-        for w in self._video_group:
-            try:
-                w.hide() if is_photo else w.show()
-            except Exception:
-                pass
+    def _set_editor_enabled(self, on: bool):
+        self._editor_inner.setEnabled(on)
 
     # ------------------------------------------------------------------
-    # File dialog
-    # ------------------------------------------------------------------
 
-    def _open_file_dialog(self, target: str):
-        if self._file_dialog:
-            try: self._file_dialog.kill()
-            except Exception: pass
-            self._file_dialog = None
-
-        self._file_dialog_target = target
-        start_dir = _PROJECT_ROOT / _ASSET_DIRS.get(target, "assets")
-        if not start_dir.exists():
-            start_dir = _PROJECT_ROOT
-
-        self._file_dialog = open_file_dialog(
-            manager=self._mgr,
-            initial_path=start_dir,
-            title="Datei auswählen",
-            extensions=_EXT.get(target),
-        )
-
-    # ------------------------------------------------------------------
-    # Save
-    # ------------------------------------------------------------------
-
-    def _save_editor(self):
-        self._error_msg = ""
-
-        # Scene type is always the active tab – no dropdown involved
-        scene_type = self._active_type
-        is_photo   = self._is_photo   # set in _open_editor and updated on dropdown change
-        name       = self._e_name.get_text().strip()  if self._e_name  else ""
-        image      = self._e_image.get_text().strip()  if self._e_image else ""
-        audio      = self._e_audio.get_text().strip()  if self._e_audio else ""
-        video      = self._e_video.get_text().strip()  if self._e_video else ""
-        dur_text   = self._e_duration.get_text().strip() if self._e_duration else ""
+    def _save(self):
+        scene_type = self._type.currentData()
+        is_photo = self._media.currentData() == "photo"
+        name = self._name.text().strip()
+        image = self._image.text().strip()
+        audio = self._audio.text().strip()
+        video = self._video.text().strip()
 
         if not name:
-            self._error_msg = "Bitte einen Namen eingeben."; return
+            self.app.show_notification("Bitte einen Namen eingeben.", level="warning")
+            return
 
-        # Validate that at least the primary media file is provided
-        if is_photo and not image and not audio:
-            self._error_msg = "Bitte mindestens eine Bilddatei oder Audiodatei angeben."; return
-        if not is_photo and not video:
-            self._error_msg = "Bitte eine Videodatei angeben."; return
-
-        from ...audio import AudioPlayer
-
-        # Step 1: try manual entry
+        # Determine duration
         duration = 0.0
-        if dur_text:
-            try:
-                duration = float(dur_text.replace(",", "."))
-            except ValueError:
-                self._error_msg = "Dauer muss eine Zahl sein (z.B. 8.5)."; return
-
-        # Step 2: if not set manually, auto-detect from file
-        if duration <= 0:
-            if is_photo and audio:
+        if is_photo:
+            if audio:
                 p = self.app.config.resolve_asset(audio)
-                if not p.exists():
-                    self._error_msg = (f"Audiodatei nicht gefunden: {audio} – "
-                                       "bitte Pfad prüfen oder Datei über Browser wählen."); return
                 dur = AudioPlayer.get_mp3_duration(p)
-                if dur is None:
-                    self._error_msg = ("Dauer konnte nicht aus der MP3 gelesen werden. "
-                                       "Bitte Dauer manuell eingeben. "
-                                       "(mutagen installiert? sudo pip3 install mutagen)"); return
-                duration = dur
-                if self._e_duration:
-                    self._e_duration.set_text(str(round(duration, 1)))
-            elif is_photo and not audio:
-                # Image only: use minimum duration for this scene type
-                duration = float(_DURATION_LIMITS[scene_type][0])
-            elif not is_photo and video:
-                p = self.app.config.resolve_asset(video)
-                if not p.exists():
-                    self._error_msg = (f"Videodatei nicht gefunden: {video} – "
-                                       "bitte Pfad prüfen oder Datei über Browser wählen."); return
-                dur = AudioPlayer.get_video_duration(p)
-                if dur is None:
-                    self._error_msg = ("Dauer konnte nicht aus dem Video gelesen werden. "
-                                       "Bitte Dauer manuell eingeben. "
-                                       "(opencv-python-headless installiert? pip3 install opencv-python-headless)"); return
-                duration = dur
-                if self._e_duration:
-                    self._e_duration.set_text(str(round(duration, 1)))
+                duration = dur if dur else 0.0
             else:
-                self._error_msg = ("Keine Mediendatei angegeben und keine manuelle Dauer. "
-                                   "Bitte Datei auswählen oder Dauer eingeben."); return
+                duration = _DURATION_LIMITS[scene_type][0]
+        else:
+            if video:
+                p = self.app.config.resolve_asset(video)
+                dur = AudioPlayer.get_video_duration(p)
+                duration = dur if dur else 0.0
 
         lo, hi = _DURATION_LIMITS[scene_type]
-        if not (lo <= duration <= hi):
-            self._error_msg = (
+        if duration < lo or duration > hi:
+            self.app.show_notification(
                 f"Dauer {duration:.1f}s liegt außerhalb des erlaubten Bereichs "
-                f"({lo}–{hi}s) für Szenentyp '{_SCENE_LABELS[scene_type]}'. "
-                "Bitte Dauer anpassen."
-            ); return
+                f"({lo}–{hi}s) für diesen Szenentyp.",
+                duration=8.0, level="error")
+            return
 
         scene_data = {
             "name": name, "type": scene_type,
@@ -616,48 +320,23 @@ class AdminScenes:
             scene_data["id"] = self._editing_id
             self.app.config.update_scene(self._editing_id, scene_data)
 
-        self._build_list()
-        self._clear_editor()
+        self.app.show_notification("Szene gespeichert.", duration=3.0, level="info")
+        self.refresh()
 
-    # ------------------------------------------------------------------
-    # Delete + confirm dialog
-    # ------------------------------------------------------------------
-
-    def _kill_confirm(self):
-        for w in self._confirm_widgets:
-            try: w.kill()
-            except Exception: pass
-        self._confirm_widgets.clear()
-        self._pending_delete = None
-
-    def _confirm_delete(self, scene_id: str):
-        self._kill_confirm()
-        deps     = self.app.config.paths_using_scene(scene_id)
-        dep_names = ", ".join(p.get("name", p["id"]) for p in deps)
-        msg = (
-            f"Szene wird von {len(deps)} Pfad(en) verwendet: {dep_names}. "
-            "Diese Pfade werden ebenfalls gelöscht. Fortfahren?"
-        ) if deps else "Szene wirklich löschen?"
-
-        self._pending_delete = scene_id
-        cx, cy = SCREEN_W // 2, SCREEN_H // 2
-        lbl = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(cx - 380, cy - 80, 760, 60),
-            text=msg, manager=self._mgr,
-        )
-        yes = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(cx - 140, cy, 130, 44),
-            text="Ja, löschen", manager=self._mgr,
-        )
-        no = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(cx + 10, cy, 130, 44),
-            text="Abbrechen", manager=self._mgr,
-        )
-        self._confirm_yes     = yes
-        self._confirm_no      = no
-        self._confirm_widgets = [lbl, yes, no]
-
-    def _do_delete(self, scene_id: str):
-        self.app.config.delete_scene(scene_id)
-        self._build_list()
-        self._clear_editor()
+    def _delete_selected(self):
+        item = self._list.currentItem()
+        if not item:
+            return
+        sid = item.data(Qt.ItemDataRole.UserRole)
+        deps = self.app.config.paths_using_scene(sid)
+        if deps:
+            names = ", ".join(p.get("name", p["id"]) for p in deps)
+            msg = (f"Szene wird von {len(deps)} Pfad(en) verwendet: {names}. "
+                   "Diese Pfade werden ebenfalls gelöscht. Fortfahren?")
+        else:
+            msg = "Szene wirklich löschen?"
+        reply = QMessageBox.question(self, "Szene löschen", msg,
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.app.config.delete_scene(sid)
+            self.refresh()

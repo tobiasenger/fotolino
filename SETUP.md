@@ -375,9 +375,9 @@ sudo usermod -aG gpio admin
    ```bash
    speaker-test -t wav -c 2
    ```
-3. Python-Bibliotheken:
+3. Python-Bibliotheken (Audio/Video):
    ```bash
-   sudo apt install -y python3-pygame mpg123
+   sudo apt install -y python3-pyqt6 python3-pyqt6.qtmultimedia vlc python3-vlc
    ```
 
 ### 5.6 Drucker einrichten (Canon SELPHY CP1500)
@@ -449,7 +449,7 @@ Das fertige Binary liegt anschließend unter `dist/fotobox`. Es kann beliebig ko
 ./dist/fotobox
 ```
 
-> Hinweis: Bei Nutzung von `picamera2`, `pygame` und anderen systemeigenen Bibliotheken müssen diese ggf. explizit als Hidden Imports oder Data Files in der `.spec`-Datei ergänzt werden. Eine `fotobox.spec`-Datei sollte nach dem ersten Build im Repository gepflegt werden.
+> Hinweis: Bei Nutzung von `picamera2`, `PyQt6`, `python-vlc` und anderen systemeigenen Bibliotheken müssen diese ggf. explizit als Hidden Imports oder Data Files in der `.spec`-Datei ergänzt werden. Eine `fotobox.spec`-Datei sollte nach dem ersten Build im Repository gepflegt werden.
 
 **Option B: Shell-Wrapper-Skript (einfacher, für Entwicklung)**
 
@@ -528,17 +528,19 @@ journalctl -u fotobox.service -f
 ```bash
 sudo apt install -y \
   python3-picamera2 \
-  python3-pygame \
+  python3-pyqt6 \
+  python3-pyqt6.qtmultimedia \
+  vlc \
+  python3-vlc \
   python3-gpiozero \
   python3-rpi.gpio \
   python3-pil \
-  python3-pip \
-  mpg123
+  python3-numpy \
+  python3-opencv \
+  python3-pip
 
 pip3 install --break-system-packages \
   pycups \
-  pillow \
-  numpy \
   mutagen
 ```
 
@@ -827,15 +829,16 @@ Die PNG-Overlays werden vom Nutzer selbst erstellt und über das Admin-Menü hoc
 
 | Thema                  | Entscheidung / Status                                                                 |
 |------------------------|---------------------------------------------------------------------------------------|
-| UI-Framework           | **pygame** – volle Kontrolle über Vollbild, Kamera-Preview, Animationen               |
+| UI-Framework           | **PyQt6** – QMainWindow + QStackedWidget, Vollbild, Animationen via QTimer/QPainter   |
 | Konfigurationsformat   | **JSON** – `settings.json`, `scenes.json`, `paths.json` getrennt                      |
 | Collage-Rendering      | **Pillow (PIL)** – PNG-Overlays mit Transparenz über Fotos legen                      |
-| GPIO-Bibliothek        | **gpiozero** – einfacher, abstrahierter Zugriff                                       |
-| Audio-Wiedergabe       | **pygame.mixer** – MP3-Support, gut in pygame-App integrierbar                        |
-| Videowiedergabe        | zu klären – `pygame` + `ffmpeg` oder externer Player (`omxplayer` / `mpv`)            |
+| GPIO-Bibliothek        | **gpiozero** – Callback an pyqtSignal, automatisch in den GUI-Thread eingereiht       |
+| Kamera-Preview         | **QGlPicamera2** (Hardware), Fallback: `get_qpixmap()` Polling via QTimer             |
+| Audio-Wiedergabe       | **QSoundEffect** (System-Sounds, nur WAV) + **python-vlc** (Szenen-Musik: WAV/MP3/OGG) |
+| Videowiedergabe        | **python-vlc** eingebettet in QFrame (`set_xwindow` nach `winId()`)                   |
 | Druckeranbindung       | **CUPS + pycups** – USB oder WLAN (WLAN bevorzugt)                                    |
-| MP3/Video-Dauer auslesen | **mutagen** (Audio), **cv2 / ffprobe** (Video)                                      |
-| Admin-UI-Widgets       | pygame-eigene Implementierung oder leichtgewichtige Bibliothek (z. B. `pygame_gui`)   |
+| Audio/Video-Dauer auslesen | **mutagen** (Audio), **cv2 / VLC** (Video)                                        |
+| Admin-UI-Widgets       | **native PyQt6-Widgets** (QLineEdit, QComboBox, QPushButton, QFileDialog, …)          |
 | Entwicklungsumgebung   | **Terminal + Claude Code CLI** und **Antigravity IDE**                                |
 | Executable-Packaging   | **PyInstaller** (`--onefile`) – Build auf dem Pi, ARM64-Binary in `dist/fotobox`      |
 | Autostart              | systemd-Service (`fotobox.service`) – robuster als Desktop-Autostart                  |

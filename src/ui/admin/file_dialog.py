@@ -1,45 +1,29 @@
 """
-Shared helper for opening pygame_gui UIFileDialog.
-Handles API differences between pygame_gui versions (allowed_extensions was
-added in a later 0.6.x release and is absent in the version typically installed
-on Raspberry Pi OS via pip).
+Native file-picker helper using QFileDialog.
 """
-from __future__ import annotations
 from pathlib import Path
 
-import pygame
-import pygame_gui
+from PyQt6.QtWidgets import QFileDialog
 
 
-def open_file_dialog(
-    manager: pygame_gui.UIManager,
-    initial_path: Path | str,
-    title: str = "Datei auswählen",
-    extensions: set | None = None,
-) -> pygame_gui.windows.UIFileDialog:
+def open_file_dialog(parent, initial_path, title="Datei auswählen", extensions=None):
     """
-    Open a UIFileDialog centred on the display.
-    Falls back gracefully when 'allowed_extensions' is not supported.
+    Open a native file-open dialog.
+
+    extensions: optional iterable of suffixes (with dot), e.g. {".wav", ".mp3"}.
+    Returns the selected file path as a string, or None if cancelled.
     """
-    surf  = pygame.display.get_surface()
-    sw, sh = surf.get_size()
-    rect  = pygame.Rect(sw // 2 - 340, sh // 2 - 280, 680, 560)
-    start = str(Path(initial_path)) if Path(initial_path).exists() else str(Path.home())
-
-    base_kwargs = dict(
-        rect=rect,
-        manager=manager,
-        window_title=title,
-        initial_file_path=start,
-        allow_picking_directories=False,
-        allow_existing_files_only=True,
-    )
-
-    # Try with allowed_extensions first (newer pygame_gui), fall back without it
     try:
-        return pygame_gui.windows.UIFileDialog(
-            **base_kwargs,
-            allowed_extensions=extensions or set(),
-        )
-    except TypeError:
-        return pygame_gui.windows.UIFileDialog(**base_kwargs)
+        start = str(Path(initial_path)) if initial_path and Path(initial_path).exists() \
+            else str(Path.home())
+    except Exception:
+        start = str(Path.home())
+
+    if extensions:
+        ext_str = " ".join(f"*{e}" for e in sorted(extensions))
+        filter_str = f"Erlaubte Dateien ({ext_str});;Alle Dateien (*)"
+    else:
+        filter_str = "Alle Dateien (*)"
+
+    path, _ = QFileDialog.getOpenFileName(parent, title, start, filter_str)
+    return path if path else None

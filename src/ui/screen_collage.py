@@ -1,58 +1,87 @@
 """
-Collage screen – shows individual photos briefly, then creates and saves the collage.
-Duration follows the collage scene setting (max 10 seconds).
+Collage screen – shows individual photos briefly, then displays the finished collage.
+Collage creation runs in a background thread; result delivered via a pyqtSignal.
+Duration follows the collage scene setting (default 10 s).
 """
+import logging
 import threading
-from pathlib import Path
+import time
 
-import pygame
+import numpy as np
 from PIL import Image
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QPainter, QColor, QFont, QPixmap, QImage
+from PyQt6.QtWidgets import QProgressBar
 
-from .base_screen import BaseScreen, draw_text_centered, draw_progress_bar, get_font
-from ..constants import (
-    SCREEN_W, SCREEN_H, COLOR_BG, COLOR_TEXT, COLOR_TEXT_DIM,
-    FONT_MEDIUM, FONT_SMALL,
-)
+from .base_screen import BaseScreen
+from ..constants import COLOR_BG, FONT_MEDIUM, SCENE_COLLAGE_DURATION
+
+logger = logging.getLogger(__name__)
+
+_BAR_STYLE = """
+QProgressBar {{ border: 2px solid #333; border-radius: 5px; background: #282828; height: 24px; }}
+QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}
+"""
+
+
+class _CollageWorker(QObject):
+    done = pyqtSignal(object, bool)   # (PIL.Image | None, error: bool)
 
 
 class CollageScreen(BaseScreen):
     def __init__(self, app):
         super().__init__(app)
         self._scene: dict | None = None
-        self._duration   = 10.0
-        self._elapsed    = 0.0
-        self._bg_surface: pygame.Surface | None = None
+        self._duration = float(SCENE_COLLAGE_DURATION)
 
-        # Photo slideshow
-        self._slideshow_surfaces: list[pygame.Surface] = []
-        self._slide_idx   = 0
-        self._slide_timer = 0.0
-        self._slide_phase_end = 0.0   # when slideshow ends and bar starts
+        self._bg_pixmap: QPixmap | None = None
+        self._scaled_bg: QPixmap | None = None
 
-        # Collage creation
-        self._collage_thread: threading.Thread | None = None
+        # Slideshow
+        self._slide_pixmaps: list[QPixmap] = []
+        self._slide_idx = 0
+        self._slide_phase_end = 0.0
+        self._slide_dur = 1.0
+        self._last_slide_switch = 0.0
+
+        # Collage
         self._collage_result: Image.Image | None = None
-        self._collage_done   = False
-        self._collage_error  = False
-        self._collage_preview: pygame.Surface | None = None
+        self._collage_pixmap: QPixmap | None = None
+        self._collage_done = False
+        self._collage_error = False
+        self._saved = False
+
+        self._worker = _CollageWorker()
+        self._worker.done.connect(self._on_collage_done)
+
+        self._start_time = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(50)
+        self._timer.timeout.connect(self._tick)
+
+        self._progress = QProgressBar(self)
+        self._progress.setRange(0, 100)
+        self._progress.setTextVisible(False)
 
     # ------------------------------------------------------------------
 
     def on_enter(self):
-        self._elapsed        = 0.0
-        self._collage_done   = False
-        self._collage_error  = False
-        self._collage_result = None
-        self._collage_preview = None
         ctx = self.app.context
+        self._collage_done = False
+        self._collage_error = False
+        self._collage_result = None
+        self._collage_pixmap = None
+        self._saved = False
+        self._slide_idx = 0
 
         scene_id = ctx.collage_scene_id()
         self._scene = self.app.config.get_scene_by_id(scene_id) if scene_id else None
-        self._duration = 10.0
+        self._duration = float(self._scene.get("duration", SCENE_COLLAGE_DURATION)) \
+            if self._scene else float(SCENE_COLLAGE_DURATION)
 
         self._build_slideshow()
         self._load_bg()
-        # Play scene audio
+
         if self._scene and self._scene.get("media_type") == "photo":
             audio = self._scene.get("audio", "")
             if audio:
@@ -60,127 +89,150 @@ class CollageScreen(BaseScreen):
                 if p.exists():
                     self.app.audio.play_music(p)
 
-        # Calculate slide phase: 1 s per photo, but at most half of total duration
-        n_photos = len(self._slideshow_surfaces)
-        slide_total = min(n_photos * 1.0, self._duration * 0.45)
+        n = len(self._slide_pixmaps)
+        slide_total = min(n * 1.0, self._duration * 0.45)
         self._slide_phase_end = slide_total
-        self._slide_idx   = 0
-        self._slide_timer = 0.0
+        self._slide_dur = slide_total / max(1, n)
 
-        # Start background collage creation
-        self._collage_thread = threading.Thread(target=self._create_collage, daemon=True)
-        self._collage_thread.start()
+        color = self.app.config.settings.get("loading_bar_color", "#FF6600")
+        self._progress.setStyleSheet(_BAR_STYLE.format(color=color))
+        self._progress.setValue(0)
+        self._position_progress()
+        self._progress.show()
+        self._progress.raise_()
+
+        # Background collage creation
+        threading.Thread(target=self._create_collage, daemon=True).start()
+
+        self._start_time = time.monotonic()
+        self._last_slide_switch = self._start_time
+        self._timer.start()
 
     def on_exit(self):
+        self._timer.stop()
         self.app.audio.stop_music()
 
     # ------------------------------------------------------------------
 
-    def handle_event(self, event: pygame.event.Event):
-        pass
+    def _elapsed(self) -> float:
+        return time.monotonic() - self._start_time
 
-    def update(self, dt: float):
-        self._elapsed += dt
+    def _tick(self):
+        elapsed = self._elapsed()
+        now = time.monotonic()
 
-        # Slideshow advance
-        if self._elapsed < self._slide_phase_end and self._slideshow_surfaces:
-            self._slide_timer += dt
-            slide_dur = self._slide_phase_end / max(1, len(self._slideshow_surfaces))
-            if self._slide_timer >= slide_dur:
-                self._slide_timer -= slide_dur
-                self._slide_idx = (self._slide_idx + 1) % len(self._slideshow_surfaces)
+        if elapsed < self._slide_phase_end and self._slide_pixmaps:
+            if now - self._last_slide_switch >= self._slide_dur:
+                self._last_slide_switch = now
+                self._slide_idx = (self._slide_idx + 1) % len(self._slide_pixmaps)
 
-        # Cache collage preview surface once ready
-        if self._collage_done and self._collage_result and not self._collage_preview:
-            self._make_preview()
+        self._progress.setValue(int(min(1.0, elapsed / self._duration) * 100))
 
-        if self._elapsed >= self._duration:
+        if elapsed >= self._duration:
             if not self._collage_done:
-                # Wait a bit more if creation is still running
-                if self._collage_thread and self._collage_thread.is_alive():
-                    return  # Let it finish
+                return  # let the worker finish first
             self._save_and_transition()
+            return
+        self.update()
 
-    def draw(self, surface: pygame.Surface):
-        # Background
-        if self._bg_surface:
-            surface.blit(self._bg_surface, (0, 0))
+    # ------------------------------------------------------------------
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._scaled_bg = None
+        self._position_progress()
+
+    def _position_progress(self):
+        w, h = self.width(), self.height()
+        bar_w = int(w * 0.6)
+        self._progress.setGeometry((w - bar_w) // 2, h - 70, bar_w, 28)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        w, h = self.width(), self.height()
+        elapsed = self._elapsed()
+
+        if elapsed < self._slide_phase_end and self._slide_pixmaps:
+            pix = self._slide_pixmaps[self._slide_idx]
+            scaled = self._scaled_cover(pix, w, h)
+            painter.drawPixmap((w - scaled.width()) // 2, (h - scaled.height()) // 2, scaled)
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 80))
+        elif self._collage_pixmap:
+            scaled = self._collage_pixmap.scaled(
+                w, h, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            painter.fillRect(self.rect(), QColor(*COLOR_BG))
+            painter.drawPixmap((w - scaled.width()) // 2, (h - scaled.height()) // 2 - 30, scaled)
         else:
-            surface.fill(COLOR_BG)
-
-        bar_color = self.app.config.loading_bar_color_rgb()
-        progress = min(1.0, self._elapsed / self._duration)
-
-        if self._elapsed < self._slide_phase_end and self._slideshow_surfaces:
-            # Slideshow phase
-            surf = self._slideshow_surfaces[self._slide_idx]
-            surface.blit(surf, (0, 0))
-            # Semi-transparent overlay
-            overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 80))
-            surface.blit(overlay, (0, 0))
-        elif self._collage_preview:
-            # Show finished collage
-            surface.blit(self._collage_preview, (0, 0))
-        else:
-            # Creating phase
-            draw_text_centered(surface, "Collage wird erstellt…", self._fm(),
-                               (255, 255, 255), SCREEN_W // 2, SCREEN_H // 2 - 60, shadow=True)
-
-        # Always draw progress bar at bottom regardless of phase
-        if self.app.config.settings.get("progress_bar_enabled", True):
-            draw_progress_bar(surface,
-                              SCREEN_W // 2 - 500, SCREEN_H - 80,
-                              1000, 24, progress, bar_color)
+            if self._bg_pixmap:
+                if self._scaled_bg is None or self._scaled_bg.size() != self.size():
+                    self._scaled_bg = self._scaled_cover(self._bg_pixmap, w, h)
+                painter.drawPixmap((w - self._scaled_bg.width()) // 2,
+                                   (h - self._scaled_bg.height()) // 2, self._scaled_bg)
+            else:
+                painter.fillRect(self.rect(), QColor(*COLOR_BG))
+            font = QFont("DejaVu Sans", FONT_MEDIUM)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor(0, 0, 0))
+            painter.drawText(3, 3 - 80, w, h, Qt.AlignmentFlag.AlignCenter, "Collage wird erstellt…")
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(0, -80, w, h, Qt.AlignmentFlag.AlignCenter, "Collage wird erstellt…")
+        painter.end()
 
     # ------------------------------------------------------------------
 
     def _build_slideshow(self):
-        self._slideshow_surfaces = []
+        self._slide_pixmaps = []
         for path in self.app.context.captured_photos:
-            try:
-                img = pygame.image.load(str(path)).convert()
-                img = pygame.transform.scale(img, (SCREEN_W, SCREEN_H))
-                self._slideshow_surfaces.append(img)
-            except Exception:
-                pass
+            pix = QPixmap(str(path))
+            if not pix.isNull():
+                self._slide_pixmaps.append(pix)
 
     def _load_bg(self):
+        self._bg_pixmap = None
+        self._scaled_bg = None
         if self._scene and self._scene.get("media_type") == "photo":
-            img_path = self._scene.get("image", "")
-            if img_path:
-                surf = self._load_image_scaled(img_path, (SCREEN_W, SCREEN_H))
-                if surf:
-                    self._bg_surface = surf
-                    return
-        self._bg_surface = None
+            self._bg_pixmap = self._load_pixmap(self._scene.get("image", ""))
 
     def _create_collage(self):
+        result = None
+        error = False
         try:
             photos = self.app.context.captured_photos
-            count  = self.app.context.capture_count()
+            count = self.app.context.capture_count()
             result = self.app.collage_creator.create(photos, count)
-            self._collage_result = result
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).error("Collage creation failed: %s", e)
-            self._collage_error = True
-        finally:
-            self._collage_done = True
+            logger.error("Collage creation failed: %s", e)
+            error = True
+        self._worker.done.emit(result, error)
 
-    def _make_preview(self):
-        import numpy as np
+    def _on_collage_done(self, result, error):
+        self._collage_result = result
+        self._collage_error = error
+        self._collage_done = True
+        if result is not None:
+            self._collage_pixmap = self._pil_to_pixmap(result)
+
+    @staticmethod
+    def _pil_to_pixmap(img: Image.Image) -> QPixmap | None:
         try:
-            arr = self._collage_result
-            arr_np = pygame.surfarray.make_surface(
-                __import__("numpy").array(arr).transpose(1, 0, 2)
-            )
-            self._collage_preview = pygame.transform.scale(arr_np, (SCREEN_W, SCREEN_H))
+            rgb = img.convert("RGB")
+            arr = np.ascontiguousarray(np.array(rgb))
+            h, w, c = arr.shape
+            qimg = QImage(arr.data, w, h, c * w, QImage.Format.Format_RGB888)
+            return QPixmap.fromImage(qimg.copy())
         except Exception:
-            self._collage_preview = None
+            return None
 
     def _save_and_transition(self):
-        if self._collage_result:
-            path = self.app.storage.save_collage(self._collage_result)
-            self.app.context.collage_path = str(path)
+        if self._saved:
+            return
+        self._saved = True
+        if self._collage_result is not None:
+            try:
+                path = self.app.storage.save_collage(self._collage_result)
+                self.app.context.collage_path = str(path)
+            except IOError as e:
+                self.app.show_notification(str(e), duration=8.0, level="error")
         self.transition_to("print")

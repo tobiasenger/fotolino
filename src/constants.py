@@ -1,12 +1,3 @@
-import pygame
-
-# Custom event types.
-# MUST use custom_type() so the IDs are reserved in pygame's internal counter
-# before pygame_gui is imported and claims its own IDs via the same counter.
-# Using USEREVENT + N directly would collide with pygame_gui's event types.
-BUTTON_EVENT      = pygame.event.custom_type()  # GPIO or keyboard button press
-SCREEN_TRANSITION = pygame.event.custom_type()  # Request a screen change
-
 # Screen resolution
 SCREEN_W = 1920
 SCREEN_H = 1080
