@@ -16,8 +16,23 @@ from pathlib import Path
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget, QLabel
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
+try:
+    from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget, QLabel
+    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
+except ModuleNotFoundError:
+    print(
+        "\n"
+        "ERROR: PyQt6 ist nicht installiert.\n"
+        "\n"
+        "Auf dem Raspberry Pi (Bookworm):\n"
+        "  sudo apt update\n"
+        "  sudo apt install -y python3-pyqt6 python3-pyqt6.qtmultimedia\n"
+        "\n"
+        "Auf dem Mac (Entwicklung):\n"
+        "  pip3 install -r requirements.txt\n",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 from PyQt6.QtGui import QPalette, QColor
 
 from src.constants     import SCREEN_W, SCREEN_H
