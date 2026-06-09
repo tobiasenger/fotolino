@@ -11,14 +11,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 try:
-    from PyQt6.QtMultimedia import QSoundEffect
-    from PyQt6.QtCore import QUrl
-    _QT_SFX = True
-except ImportError:
-    _QT_SFX = False
-    logger.info("QSoundEffect not available – system sounds disabled")
-
-try:
     import vlc as _vlc
     _VLC = True
 except ImportError:
@@ -27,12 +19,30 @@ except ImportError:
 
 
 class AudioPlayer:
-    """One background music track (VLC) + unlimited short WAV sound effects (Qt)."""
+    """One background music track (VLC) + unlimited short WAV sound effects (Qt).
+
+    QSoundEffect (and the entire QtMultimedia backend) is imported lazily inside
+    __init__ so it is only loaded after QApplication exists.  Importing
+    PyQt6.QtMultimedia at module level causes a Qt abort on some platforms.
+    """
 
     def __init__(self):
         self._instance = _vlc.Instance("--no-video") if _VLC else None
         self._music_player = None          # vlc.MediaPlayer for current music
         self._effects: list = []           # keep QSoundEffect refs alive
+
+        # Deferred import – must happen after QApplication is constructed.
+        try:
+            from PyQt6.QtMultimedia import QSoundEffect as _QSE
+            from PyQt6.QtCore import QUrl as _QUrl
+            self._QSoundEffect = _QSE
+            self._QUrl = _QUrl
+            self._qt_sfx = True
+        except (ImportError, RuntimeError) as e:
+            self._QSoundEffect = None
+            self._QUrl = None
+            self._qt_sfx = False
+            logger.info("QSoundEffect not available (%s) – system sounds disabled", e)
 
     # ------------------------------------------------------------------
     # Music (single long track) – VLC
@@ -80,7 +90,7 @@ class AudioPlayer:
     # ------------------------------------------------------------------
 
     def play_sfx(self, path):
-        if not _QT_SFX:
+        if not self._qt_sfx:
             return
         p = Path(path)
         if not p.exists():
@@ -93,8 +103,8 @@ class AudioPlayer:
             )
             return
         try:
-            effect = QSoundEffect()
-            effect.setSource(QUrl.fromLocalFile(str(p)))
+            effect = self._QSoundEffect()
+            effect.setSource(self._QUrl.fromLocalFile(str(p)))
             effect.play()
             # Keep a reference so the object isn't garbage-collected mid-playback.
             self._effects.append(effect)

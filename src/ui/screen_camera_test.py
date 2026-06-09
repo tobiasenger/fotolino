@@ -13,11 +13,7 @@ from .base_screen import BaseScreen
 
 logger = logging.getLogger(__name__)
 
-try:
-    from picamera2.previews.qt import QGlPicamera2
-    _QGL = True
-except Exception:
-    _QGL = False
+# QGlPicamera2 imported lazily in _setup_preview() – see screen_capture.py for reason.
 
 _BTN_STYLE = (
     "QPushButton { background: #2a2a50; color: white; border: 2px solid #444488; "
@@ -68,9 +64,10 @@ class CameraTestScreen(BaseScreen):
 
     def _setup_preview(self):
         self._preview_pixmap = None
-        if _QGL and self.app.camera.is_connected() and not self._tried_qgl:
+        if self.app.camera.is_connected() and not self._tried_qgl:
             self._tried_qgl = True
             try:
+                from picamera2.previews.qt import QGlPicamera2
                 self._qgl = QGlPicamera2(
                     self.app.camera.picam2, width=self.width() or 1280,
                     height=self.height() or 720, keep_ar=True)

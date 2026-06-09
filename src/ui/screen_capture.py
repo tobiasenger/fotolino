@@ -20,11 +20,9 @@ from ..constants import FONT_HUGE, FONT_LARGE
 
 logger = logging.getLogger(__name__)
 
-try:
-    from picamera2.previews.qt import QGlPicamera2
-    _QGL = True
-except Exception:
-    _QGL = False
+# QGlPicamera2 is imported lazily inside _setup_preview() so it is only loaded
+# after QApplication exists – importing picamera2.previews.qt at module level
+# triggers OpenGL/EGL initialisation that requires QApplication.
 
 
 class _Phase(Enum):
@@ -86,9 +84,10 @@ class CaptureScreen(BaseScreen):
 
     def _setup_preview(self):
         self._preview_pixmap = None
-        if _QGL and self.app.camera.is_connected() and not self._tried_qgl:
+        if self.app.camera.is_connected() and not self._tried_qgl:
             self._tried_qgl = True
             try:
+                from picamera2.previews.qt import QGlPicamera2
                 self._qgl = QGlPicamera2(
                     self.app.camera.picam2, width=self.width() or 1280,
                     height=self.height() or 720, keep_ar=False,
