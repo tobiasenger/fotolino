@@ -115,7 +115,7 @@ class StartScreen(BaseScreen):
 
         if bg_type == "video" and _VLC:
             try:
-                self._vlc_instance = _vlc.Instance("--no-xlib", "--quiet")
+                self._vlc_instance = _vlc.Instance("--quiet")
                 media = self._vlc_instance.media_new(str(path))
                 media.add_option("input-repeat=65535")
                 self._vlc_player = self._vlc_instance.media_player_new()
@@ -124,7 +124,7 @@ class StartScreen(BaseScreen):
                 self._video_frame.setGeometry(self.rect())
                 self._video_frame.show()
                 self._video_frame.lower()
-                QTimer.singleShot(0, self._attach_and_play_video)
+                QTimer.singleShot(200, self._attach_and_play_video)
                 return
             except Exception:
                 self._stop_video()

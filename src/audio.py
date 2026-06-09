@@ -86,31 +86,48 @@ class AudioPlayer:
             return False
 
     # ------------------------------------------------------------------
-    # Sound effects (short one-shot) – QSoundEffect, WAV only
+    # Sound effects (short one-shot) – WAV only
     # ------------------------------------------------------------------
 
     def play_sfx(self, path):
-        if not self._qt_sfx:
-            return
+        import sys
         p = Path(path)
         if not p.exists():
             logger.warning("SFX file not found: %s", p)
             return
         if p.suffix.lower() != ".wav":
             logger.warning(
-                "System sound '%s' is not a WAV file – QSoundEffect only supports WAV. "
-                "Sound will not play.", p
+                "System sound '%s' is not a WAV file – only WAV is supported. "
+                "Sound will not play.", p,
             )
             return
-        try:
-            effect = self._QSoundEffect()
-            effect.setSource(self._QUrl.fromLocalFile(str(p)))
-            effect.play()
-            # Keep a reference so the object isn't garbage-collected mid-playback.
-            self._effects.append(effect)
-            self._effects = [e for e in self._effects if e.isPlaying() or e is effect]
-        except Exception as e:
-            logger.warning("Could not play sfx %s: %s", p, e)
+
+        # aplay is the most reliable WAV player on Pi/Linux – no Qt or VLC dependency.
+        if sys.platform.startswith("linux"):
+            try:
+                import subprocess
+                subprocess.Popen(
+                    ["aplay", "-q", str(p)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            except (FileNotFoundError, OSError) as e:
+                logger.debug("aplay not available (%s) – trying QSoundEffect", e)
+
+        # QSoundEffect fallback (Mac / Windows, or if aplay is missing).
+        if self._qt_sfx:
+            try:
+                effect = self._QSoundEffect()
+                effect.setSource(self._QUrl.fromLocalFile(str(p)))
+                effect.play()
+                self._effects.append(effect)
+                self._effects = [e for e in self._effects if e.isPlaying() or e is effect]
+                return
+            except Exception as e:
+                logger.warning("QSoundEffect failed: %s", e)
+
+        logger.warning("No audio backend available for SFX: %s", p)
 
     # ------------------------------------------------------------------
     # Convenience

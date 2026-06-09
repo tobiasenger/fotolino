@@ -107,10 +107,6 @@ class AdminScenes(QWidget):
     def _build_form(self):
         self._name = QLineEdit()
 
-        self._type = QComboBox()
-        for key in _SCENE_TYPES:
-            self._type.addItem(_SCENE_LABELS[key], key)
-
         self._media = QComboBox()
         self._media.addItem("Foto + Ton", "photo")
         self._media.addItem("Video", "video")
@@ -144,7 +140,6 @@ class AdminScenes(QWidget):
         self._video_row = self._make_row(self._video, vid_browse)
 
         self._form.addRow("Name:", self._name)
-        self._form.addRow("Szenentyp:", self._type)
         self._form.addRow("Medientyp:", self._media)
         self._lbl_image = QLabel("Bilddatei (.jpg/.png):")
         self._form.addRow(self._lbl_image, self._image_row)
@@ -242,7 +237,6 @@ class AdminScenes(QWidget):
     def _new_scene(self):
         self._editing_id = "__new__"
         self._name.setText("")
-        self._type.setCurrentIndex(_SCENE_TYPES.index(self._active_type))
         self._media.setCurrentIndex(0)
         self._image.setText("")
         self._audio.setText("")
@@ -255,8 +249,6 @@ class AdminScenes(QWidget):
     def _load_into_editor(self, scene: dict):
         self._editing_id = scene["id"]
         self._name.setText(scene.get("name", ""))
-        ti = self._type.findData(scene.get("type", self._active_type))
-        self._type.setCurrentIndex(ti if ti >= 0 else 0)
         self._media.setCurrentIndex(0 if scene.get("media_type", "photo") == "photo" else 1)
         self._image.setText(scene.get("image", ""))
         self._audio.setText(scene.get("audio", ""))
@@ -273,7 +265,7 @@ class AdminScenes(QWidget):
     # ------------------------------------------------------------------
 
     def _save(self):
-        scene_type = self._type.currentData()
+        scene_type = self._active_type
         is_photo = self._media.currentData() == "photo"
         name = self._name.text().strip()
         image = self._image.text().strip()

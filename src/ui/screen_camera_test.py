@@ -1,7 +1,7 @@
 """
 Camera test screen – live preview with a "Testfoto" button and "Zurück" button.
-Reachable from the admin settings (device tab). Uses QGlPicamera2 if available,
-otherwise polls camera.get_qpixmap().
+Reachable from admin settings (Gerät tab). Polls camera.get_qpixmap() via a QTimer.
+QGlPicamera2 is intentionally not used – see screen_capture.py for the reason.
 """
 import logging
 
@@ -12,8 +12,6 @@ from PyQt6.QtWidgets import QPushButton
 from .base_screen import BaseScreen
 
 logger = logging.getLogger(__name__)
-
-# QGlPicamera2 imported lazily in _setup_preview() – see screen_capture.py for reason.
 
 _BTN_STYLE = (
     "QPushButton { background: #2a2a50; color: white; border: 2px solid #444488; "
@@ -26,8 +24,6 @@ class CameraTestScreen(BaseScreen):
     def __init__(self, app):
         super().__init__(app)
         self._preview_pixmap: QPixmap | None = None
-        self._qgl = None
-        self._tried_qgl = False
         self._status = ""
 
         self._timer = QTimer(self)
@@ -46,7 +42,6 @@ class CameraTestScreen(BaseScreen):
 
     def on_enter(self):
         self._status = ""
-        self._setup_preview()   # register QGlPicamera2 BEFORE camera starts streaming
         self.app.camera.start()
         self._position_buttons()
         self._back_btn.show()
@@ -57,43 +52,12 @@ class CameraTestScreen(BaseScreen):
 
     def on_exit(self):
         self._timer.stop()
-        self._teardown_preview()
         self.app.camera.stop()
 
     # ------------------------------------------------------------------
 
-    def _setup_preview(self):
-        self._preview_pixmap = None
-        if self.app.camera.is_connected() and not self._tried_qgl:
-            self._tried_qgl = True
-            try:
-                from picamera2.previews.qt import QGlPicamera2
-                self._qgl = QGlPicamera2(
-                    self.app.camera.picam2, width=self.width() or 1280,
-                    height=self.height() or 720, keep_ar=True)
-                self._qgl.setParent(self)
-                self._qgl.setGeometry(self.rect())
-                self._qgl.show()
-                self._qgl.lower()
-            except Exception as e:
-                logger.warning("QGlPicamera2 failed (%s) – using polling", e)
-                self._qgl = None
-
-    def _teardown_preview(self):
-        if self._qgl is not None:
-            try:
-                self._qgl.hide()
-                self._qgl.setParent(None)
-                self._qgl.deleteLater()
-            except Exception:
-                pass
-            self._qgl = None
-            self._tried_qgl = False
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._qgl is not None:
-            self._qgl.setGeometry(self.rect())
         self._position_buttons()
 
     def _position_buttons(self):
@@ -104,23 +68,21 @@ class CameraTestScreen(BaseScreen):
     # ------------------------------------------------------------------
 
     def _tick(self):
-        if self._qgl is None:
-            try:
-                self._preview_pixmap = self.app.camera.get_qpixmap(mirror=True)
-            except Exception:
-                self._preview_pixmap = None
-            self.update()
+        try:
+            self._preview_pixmap = self.app.camera.get_qpixmap(mirror=True)
+        except Exception:
+            self._preview_pixmap = None
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         w, h = self.width(), self.height()
-        if self._qgl is None:
-            if self._preview_pixmap:
-                scaled = self._scaled_cover(self._preview_pixmap, w, h)
-                painter.drawPixmap((w - scaled.width()) // 2,
-                                   (h - scaled.height()) // 2, scaled)
-            else:
-                painter.fillRect(self.rect(), QColor(10, 10, 20))
+        if self._preview_pixmap:
+            scaled = self._scaled_cover(self._preview_pixmap, w, h)
+            painter.drawPixmap((w - scaled.width()) // 2,
+                               (h - scaled.height()) // 2, scaled)
+        else:
+            painter.fillRect(self.rect(), QColor(10, 10, 20))
         if self._status:
             painter.setPen(QColor(255, 190, 0))
             painter.drawText(20, 40, self._status)

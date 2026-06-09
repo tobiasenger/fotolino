@@ -300,6 +300,8 @@ class AdminSettings(QWidget):
         cfg["demo_mode"] = bool(self._get("demo_mode"))
 
         self.app.config.save_settings()
+        self.app.config.save_scenes()
+        self.app.config.save_paths()
 
         # Warn if a system sound is not WAV.
         for key, label in (("shutter_click", "Auslöser-Ton"), ("countdown_beep", "Countdown-Ton")):

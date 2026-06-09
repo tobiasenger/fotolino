@@ -2,9 +2,9 @@
 Capture screen – live mirrored camera preview with countdown and photo capture.
 Flash LED is ON for the entire duration of this screen.
 
-Preview strategy:
-  * Try QGlPicamera2 (hardware-accelerated picamera2 preview).
-  * Otherwise poll camera.get_qpixmap() via a QTimer and paint it.
+Preview: polls camera.get_qpixmap() via a 50 ms QTimer.
+QGlPicamera2 is intentionally not used – it causes an OpenGL/EGL abort with
+Camera Module v2 on Raspberry Pi 4 regardless of initialisation order.
 """
 from enum import Enum, auto
 from pathlib import Path
@@ -19,10 +19,6 @@ from .base_screen import BaseScreen
 from ..constants import FONT_HUGE, FONT_LARGE
 
 logger = logging.getLogger(__name__)
-
-# QGlPicamera2 is imported lazily inside _setup_preview() so it is only loaded
-# after QApplication exists – importing picamera2.previews.qt at module level
-# triggers OpenGL/EGL initialisation that requires QApplication.
 
 
 class _Phase(Enum):
@@ -44,10 +40,6 @@ class CaptureScreen(BaseScreen):
 
         self._preview_pixmap: QPixmap | None = None
 
-        # Hardware preview widget (created lazily, only if QGlPicamera2 works)
-        self._qgl = None
-        self._tried_qgl = False
-
         self._timer = QTimer(self)
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._tick)
@@ -63,59 +55,20 @@ class CaptureScreen(BaseScreen):
         self._set_phase(_Phase.PREVIEW)
 
         self.app.gpio.set_flash_led(True)
-        self._setup_preview()   # register QGlPicamera2 BEFORE camera starts streaming
         self.app.camera.start()
 
         if not self.app.camera.is_connected():
             self.app.show_notification(
                 "Kamera nicht verfügbar – Testbild wird verwendet. "
                 "Kabelverbindung und 'rpicam-hello' prüfen.",
-                duration=5.0, level="warning"
+                duration=5.0, level="warning",
             )
         self._timer.start()
 
     def on_exit(self):
         self._timer.stop()
         self.app.gpio.set_flash_led(False)
-        self._teardown_preview()
         self.app.camera.stop()
-
-    # ------------------------------------------------------------------
-
-    def _setup_preview(self):
-        self._preview_pixmap = None
-        if self.app.camera.is_connected() and not self._tried_qgl:
-            self._tried_qgl = True
-            try:
-                from picamera2.previews.qt import QGlPicamera2
-                self._qgl = QGlPicamera2(
-                    self.app.camera.picam2, width=self.width() or 1280,
-                    height=self.height() or 720, keep_ar=False,
-                )
-                self._qgl.setParent(self)
-                self._qgl.setGeometry(self.rect())
-                self._qgl.show()
-                self._qgl.lower()
-                return
-            except Exception as e:
-                logger.warning("QGlPicamera2 preview failed (%s) – using polling", e)
-                self._qgl = None
-
-    def _teardown_preview(self):
-        if self._qgl is not None:
-            try:
-                self._qgl.hide()
-                self._qgl.setParent(None)
-                self._qgl.deleteLater()
-            except Exception:
-                pass
-            self._qgl = None
-            self._tried_qgl = False
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self._qgl is not None:
-            self._qgl.setGeometry(self.rect())
 
     # ------------------------------------------------------------------
 
@@ -156,8 +109,7 @@ class CaptureScreen(BaseScreen):
                     return
                 self._set_phase(_Phase.COUNTDOWN)
 
-        # Poll preview frame if not using QGlPicamera2
-        if self._qgl is None and self._phase != _Phase.FLASH:
+        if self._phase != _Phase.FLASH:
             try:
                 self._preview_pixmap = self.app.camera.get_qpixmap(mirror=True)
             except Exception:
@@ -175,14 +127,13 @@ class CaptureScreen(BaseScreen):
             painter.end()
             return
 
-        if self._qgl is None:
-            if self._preview_pixmap:
-                scaled = self._scaled_cover(self._preview_pixmap, w, h)
-                x = (w - scaled.width()) // 2
-                y = (h - scaled.height()) // 2
-                painter.drawPixmap(x, y, scaled)
-            else:
-                painter.fillRect(self.rect(), QColor(10, 10, 20))
+        if self._preview_pixmap:
+            scaled = self._scaled_cover(self._preview_pixmap, w, h)
+            x = (w - scaled.width()) // 2
+            y = (h - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+        else:
+            painter.fillRect(self.rect(), QColor(10, 10, 20))
 
         self._draw_hud(painter, w, h)
         painter.end()
