@@ -2,10 +2,11 @@
 Audio playback for the Fotobox.
 
 Two-tier design:
-  * System sound effects (shutter click) → QSoundEffect. WAV only.
+  * System sound effects (shutter click) → aplay subprocess (Linux/Pi). WAV only.
   * Background music (scene audio)        → VLC MediaPlayer. WAV / MP3 / OGG.
 """
 import logging
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,9 @@ class AudioPlayer:
         self._music_player = None          # vlc.MediaPlayer for current music
         self._effects: list = []           # keep QSoundEffect refs alive
 
+        if sys.platform.startswith("linux"):
+            self._init_audio_routing()
+
         # Deferred import – must happen after QApplication is constructed.
         try:
             from PyQt6.QtMultimedia import QSoundEffect as _QSE
@@ -43,6 +47,50 @@ class AudioPlayer:
             self._QUrl = None
             self._qt_sfx = False
             logger.info("QSoundEffect not available (%s) – system sounds disabled", e)
+
+    # ------------------------------------------------------------------
+    # Audio routing init (Raspberry Pi)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _init_audio_routing():
+        """Route audio to the 3.5 mm headphone jack on Raspberry Pi.
+
+        Tries two approaches (silently ignores failures on non-Pi systems):
+        1. pactl – finds the headphone/bcm2835 PulseAudio/PipeWire sink and
+           sets it as the system default so VLC, aplay and all other apps
+           automatically use it.
+        2. amixer – forces the ALSA PCM Playback Route to analog (numid=3=1).
+        """
+        import subprocess
+        # --- PulseAudio / PipeWire ---
+        try:
+            r = subprocess.run(
+                ["pactl", "list", "sinks", "short"],
+                capture_output=True, text=True, timeout=3, check=False,
+            )
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    name = parts[1]
+                    if any(k in name.lower() for k in
+                           ("headphones", "bcm2835_audio", "bcm2835", "headphone")):
+                        subprocess.run(
+                            ["pactl", "set-default-sink", name],
+                            capture_output=True, timeout=3, check=False,
+                        )
+                        logger.info("Audio sink set to: %s", name)
+                        break
+        except Exception as e:
+            logger.debug("pactl not available: %s", e)
+        # --- ALSA direct ---
+        try:
+            subprocess.run(
+                ["amixer", "cset", "numid=3", "1"],   # 1 = analog / headphone
+                capture_output=True, timeout=2, check=False,
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Music (single long track) – VLC

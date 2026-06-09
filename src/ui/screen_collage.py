@@ -1,16 +1,16 @@
 """
-Collage screen – shows individual photos briefly, then displays the finished collage.
-Collage creation runs in a background thread; result delivered via a pyqtSignal.
-Duration follows the collage scene setting (default 10 s).
+Collage screen – cycles through the captured photos for 10 s while the
+collage is assembled in the background, then hands off to the print screen.
+
+Timing: each photo is shown for (total_duration / n_photos) seconds.
+The finished collage is shown on the print screen, NOT here.
 """
 import logging
 import threading
 import time
 
-import numpy as np
-from PIL import Image
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QPainter, QColor, QFont, QPixmap, QImage
+from PyQt6.QtGui import QPainter, QColor, QFont, QPixmap
 from PyQt6.QtWidgets import QProgressBar
 
 from .base_screen import BaseScreen
@@ -37,16 +37,14 @@ class CollageScreen(BaseScreen):
         self._bg_pixmap: QPixmap | None = None
         self._scaled_bg: QPixmap | None = None
 
-        # Slideshow
+        # Slideshow state
         self._slide_pixmaps: list[QPixmap] = []
         self._slide_idx = 0
-        self._slide_phase_end = 0.0
-        self._slide_dur = 1.0
+        self._slide_dur = 1.0           # seconds per photo
         self._last_slide_switch = 0.0
 
-        # Collage
-        self._collage_result: Image.Image | None = None
-        self._collage_pixmap: QPixmap | None = None
+        # Collage worker state
+        self._collage_result = None     # PIL.Image delivered by worker
         self._collage_done = False
         self._collage_error = False
         self._saved = False
@@ -67,10 +65,9 @@ class CollageScreen(BaseScreen):
 
     def on_enter(self):
         ctx = self.app.context
+        self._collage_result = None
         self._collage_done = False
         self._collage_error = False
-        self._collage_result = None
-        self._collage_pixmap = None
         self._saved = False
         self._slide_idx = 0
 
@@ -82,17 +79,15 @@ class CollageScreen(BaseScreen):
         self._build_slideshow()
         self._load_bg()
 
+        n = len(self._slide_pixmaps)
+        self._slide_dur = self._duration / max(1, n)
+
         if self._scene and self._scene.get("media_type") == "photo":
             audio = self._scene.get("audio", "")
             if audio:
                 p = self.app.config.resolve_asset(audio)
                 if p.exists():
                     self.app.audio.play_music(p)
-
-        n = len(self._slide_pixmaps)
-        slide_total = min(n * 1.0, self._duration * 0.45)
-        self._slide_phase_end = slide_total
-        self._slide_dur = slide_total / max(1, n)
 
         color = self.app.config.settings.get("loading_bar_color", "#FF6600")
         self._progress.setStyleSheet(_BAR_STYLE.format(color=color))
@@ -101,7 +96,6 @@ class CollageScreen(BaseScreen):
         self._progress.show()
         self._progress.raise_()
 
-        # Background collage creation
         threading.Thread(target=self._create_collage, daemon=True).start()
 
         self._start_time = time.monotonic()
@@ -121,18 +115,22 @@ class CollageScreen(BaseScreen):
         elapsed = self._elapsed()
         now = time.monotonic()
 
-        if elapsed < self._slide_phase_end and self._slide_pixmaps:
-            if now - self._last_slide_switch >= self._slide_dur:
-                self._last_slide_switch = now
-                self._slide_idx = (self._slide_idx + 1) % len(self._slide_pixmaps)
+        # Advance slideshow
+        if self._slide_pixmaps and now - self._last_slide_switch >= self._slide_dur:
+            self._last_slide_switch = now
+            self._slide_idx = (self._slide_idx + 1) % len(self._slide_pixmaps)
 
+        # Progress bar tracks the 10-second slideshow window
         self._progress.setValue(int(min(1.0, elapsed / self._duration) * 100))
 
         if elapsed >= self._duration:
             if not self._collage_done:
-                return  # let the worker finish first
+                # Slideshow continues while we wait for the worker
+                self.update()
+                return
             self._save_and_transition()
             return
+
         self.update()
 
     # ------------------------------------------------------------------
@@ -150,20 +148,16 @@ class CollageScreen(BaseScreen):
     def paintEvent(self, event):
         painter = QPainter(self)
         w, h = self.width(), self.height()
-        elapsed = self._elapsed()
 
-        if elapsed < self._slide_phase_end and self._slide_pixmaps:
+        if self._slide_pixmaps:
             pix = self._slide_pixmaps[self._slide_idx]
             scaled = self._scaled_cover(pix, w, h)
-            painter.drawPixmap((w - scaled.width()) // 2, (h - scaled.height()) // 2, scaled)
-            painter.fillRect(self.rect(), QColor(0, 0, 0, 80))
-        elif self._collage_pixmap:
-            scaled = self._collage_pixmap.scaled(
-                w, h, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            painter.fillRect(self.rect(), QColor(*COLOR_BG))
-            painter.drawPixmap((w - scaled.width()) // 2, (h - scaled.height()) // 2 - 30, scaled)
+            painter.drawPixmap((w - scaled.width()) // 2,
+                               (h - scaled.height()) // 2, scaled)
+            # Subtle dim so the photo isn't too raw
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 60))
         else:
+            # No photos – edge case
             if self._bg_pixmap:
                 if self._scaled_bg is None or self._scaled_bg.size() != self.size():
                     self._scaled_bg = self._scaled_cover(self._bg_pixmap, w, h)
@@ -178,6 +172,7 @@ class CollageScreen(BaseScreen):
             painter.drawText(3, 3 - 80, w, h, Qt.AlignmentFlag.AlignCenter, "Collage wird erstellt…")
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(0, -80, w, h, Qt.AlignmentFlag.AlignCenter, "Collage wird erstellt…")
+
         painter.end()
 
     # ------------------------------------------------------------------
@@ -209,21 +204,10 @@ class CollageScreen(BaseScreen):
 
     def _on_collage_done(self, result, error):
         self._collage_result = result
-        self._collage_error = error
         self._collage_done = True
-        if result is not None:
-            self._collage_pixmap = self._pil_to_pixmap(result)
-
-    @staticmethod
-    def _pil_to_pixmap(img: Image.Image) -> QPixmap | None:
-        try:
-            rgb = img.convert("RGB")
-            arr = np.ascontiguousarray(np.array(rgb))
-            h, w, c = arr.shape
-            qimg = QImage(arr.data, w, h, c * w, QImage.Format.Format_RGB888)
-            return QPixmap.fromImage(qimg.copy())
-        except Exception:
-            return None
+        self._collage_error = error
+        if error or result is None:
+            logger.warning("Collage worker reported failure")
 
     def _save_and_transition(self):
         if self._saved:

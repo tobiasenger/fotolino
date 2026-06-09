@@ -61,18 +61,26 @@ class CollageCreator:
                 logger.warning("Could not place photo %s: %s", photo_paths[i], e)
 
         # Overlay PNG cover
-        cover_path = self._cfg.resolve_asset(self._cfg.cover_path(capture_count))
-        if cover_path.exists():
-            try:
-                overlay = Image.open(cover_path).convert("RGBA")
-                if overlay.size != (COLLAGE_W, COLLAGE_H):
-                    logger.warning("Cover %s is not 1800×1200 – skipping overlay", cover_path)
-                else:
+        cover_rel = self._cfg.cover_path(capture_count)
+        if cover_rel:
+            cover_path = self._cfg.resolve_asset(cover_rel)
+            if cover_path.exists():
+                try:
+                    overlay = Image.open(cover_path).convert("RGBA")
+                    if overlay.size != (COLLAGE_W, COLLAGE_H):
+                        logger.warning(
+                            "Cover %s is %dx%d (expected %dx%d) – auto-scaling",
+                            cover_path, overlay.size[0], overlay.size[1], COLLAGE_W, COLLAGE_H,
+                        )
+                        overlay = overlay.resize((COLLAGE_W, COLLAGE_H), Image.LANCZOS)
                     canvas_rgba = canvas.convert("RGBA")
                     combined    = Image.alpha_composite(canvas_rgba, overlay)
                     canvas      = combined.convert("RGB")
-            except Exception as e:
-                logger.warning("Could not apply overlay %s: %s", cover_path, e)
+                    logger.debug("Overlay applied: %s", cover_path)
+                except Exception as e:
+                    logger.warning("Could not apply overlay %s: %s", cover_path, e)
+            else:
+                logger.debug("Overlay file not found: %s", cover_path)
 
         return canvas
 
