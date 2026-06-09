@@ -22,15 +22,20 @@
   "screen_width": 1920,
   "screen_height": 1080,
   "fullscreen": true,
+  "force_headphone_audio": true,
   "system_sounds": {
-    "shutter_click": "assets/sounds/click.mp3",
+    "shutter_click": "",
     "countdown_beep": ""
   },
   "capture_timing": {
     "initial_preview_seconds": 2.0,
     "countdown_from": 3,
     "smile_duration": 0.8,
+    "smile_text": "Lächeln!",
+    "smile_enabled": true,
     "post_photo_pause": 2.0,
     "flash_duration": 0.15
-  }
+  },
+  "demo_mode": false,
+  "progress_bar_enabled": true
 }

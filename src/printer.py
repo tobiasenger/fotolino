@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import tempfile
 from pathlib import Path
@@ -109,17 +111,22 @@ class Printer:
             return False
 
     def print_image(self, img: Image.Image) -> bool:
-        """Save PIL image to a temp file and print it."""
+        """Save PIL image to a temp file and print it (CUPS copies it to its spool)."""
         if self.is_demo():
             print(_DEMO_MSG)
             return True
+        tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                img.save(tmp.name, "JPEG", quality=95)
-                return self.print_collage(Path(tmp.name))
+                tmp_path = Path(tmp.name)
+                img.save(tmp, "JPEG", quality=95)
+            return self.print_collage(tmp_path)
         except Exception as e:
             logger.error("print_image fehlgeschlagen: %s", e)
             return False
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
 
     def printer_ready(self) -> bool:
         if self.is_demo():

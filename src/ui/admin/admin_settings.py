@@ -1,28 +1,27 @@
 """
 Admin Settings tab (PyQt6).
 
-Left sidebar: 6 tabs (Startscreen / Overlays / Aufnahme / Darstellung / Gerät / Sicherung).
-Right: QStackedWidget with a QScrollArea per tab; each tab uses a QFormLayout.
+Left sidebar: 6 tabs (Startscreen / Overlays / Aufnahme / Darstellung /
+Gerät / Sicherung). Right: QStackedWidget with a QScrollArea per tab.
 
-File-format validation:
-  * Shutter click: WAV only (QSoundEffect) – red warning if MP3/OGG selected.
-  * Background image/video: .jpg/.jpeg/.png or .mp4/.avi/.mov.
-  * Collage overlays: .png (1800×1200 validated on save).
+The tabs are rebuilt from the saved configuration every time the view is
+shown (refresh()), so an imported configuration is reflected immediately.
 """
 from __future__ import annotations
+
 import json
-import shutil
 from pathlib import Path
 
-from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLabel, QLineEdit,
-    QComboBox, QPushButton, QStackedWidget, QScrollArea, QFileDialog,
-)
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
+)
 from PIL import Image
 
-from ...constants import COLLAGE_W, COLLAGE_H
-from .file_dialog import open_file_dialog
+from ...constants import COLLAGE_H, COLLAGE_W
+from .. import theme
+from ..widgets import FileSelectRow
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 _VIDEO_EXTS = {".mp4", ".avi", ".mov"}
@@ -32,21 +31,13 @@ _WAV_EXTS = {".wav"}
 
 _TABS = ["Startscreen", "Overlays", "Aufnahme", "Darstellung", "Gerät", "Sicherung"]
 
-_BTN = (
-    "QPushButton { background: #2a2a50; color: white; border: 1px solid #444488; "
-    "border-radius: 5px; padding: 8px 14px; } QPushButton:hover { border-color: #ff6600; }"
-)
-_TAB_BTN = (
-    "QPushButton { background: #2a2a50; color: white; border: none; border-radius: 5px; "
-    "padding: 10px; text-align: left; } QPushButton:checked { background: #ff6600; }")
-
 
 class AdminSettings(QWidget):
     def __init__(self, app):
         super().__init__()
         self.app = app
         self._fields: dict = {}
-        self._warns: dict = {}
+        self._active_idx = 0
 
         root = QHBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -59,13 +50,13 @@ class AdminSettings(QWidget):
         for i, name in enumerate(_TABS):
             b = QPushButton(name)
             b.setCheckable(True)
-            b.setStyleSheet(_TAB_BTN)
+            b.setStyleSheet(theme.TAB_BTN_STYLE)
             b.clicked.connect(lambda _, idx=i: self._show_tab(idx))
             side.addWidget(b)
             self._tab_btns[i] = b
         side.addStretch()
         save = QPushButton("Speichern")
-        save.setStyleSheet(_BTN)
+        save.setStyleSheet(theme.BTN_STYLE)
         save.clicked.connect(self._save)
         side.addWidget(save)
         side_w = QWidget()
@@ -81,8 +72,10 @@ class AdminSettings(QWidget):
         self._show_tab(0)
 
     # ------------------------------------------------------------------
+    # Form builders
+    # ------------------------------------------------------------------
 
-    def _scroll_form(self) -> tuple[QScrollArea, QFormLayout]:
+    def _scroll_form(self) -> QFormLayout:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         inner = QWidget()
@@ -90,62 +83,20 @@ class AdminSettings(QWidget):
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         scroll.setWidget(inner)
         self._stack.addWidget(scroll)
-        return scroll, form
+        return form
 
     def _entry(self, key: str, value, form: QFormLayout, label: str):
         line = QLineEdit(str(value))
         self._fields[key] = line
         form.addRow(label, line)
-        return line
 
     def _file_row(self, key: str, value, form: QFormLayout, label: str,
                   exts: set, kind: str):
-        line = QLineEdit(str(value))
-        browse = QPushButton("…")
-        browse.setStyleSheet(_BTN)
-        warn = QLabel("")
-        warn.setStyleSheet("color: #ff6060;")
-        warn.setWordWrap(True)
-
-        def do_browse():
-            base = str(self.app.config.resolve_asset("assets"))
-            sel = open_file_dialog(self, base, f"{kind} auswählen", exts)
-            if not sel:
-                return
-            try:
-                rel = Path(sel).resolve().relative_to(
-                    self.app.config.resolve_asset("").resolve())
-                line.setText(str(rel))
-            except Exception:
-                line.setText(sel)
-            self._validate(line, exts, kind, warn)
-
-        browse.clicked.connect(do_browse)
-        line.textChanged.connect(lambda: self._validate(line, exts, kind, warn))
-
-        row = QWidget()
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(line, 1)
-        lay.addWidget(browse)
-
-        self._fields[key] = line
-        self._warns[key] = warn
+        row = FileSelectRow(self.app.config, exts, kind, value=value)
+        self._fields[key] = row
         form.addRow(label, row)
-        form.addRow("", warn)
-        self._validate(line, exts, kind, warn)
-        return line
 
-    @staticmethod
-    def _validate(line: QLineEdit, exts: set, kind: str, warn: QLabel):
-        path = line.text().strip()
-        if path and Path(path).suffix.lower() not in exts:
-            allowed = ", ".join(sorted(exts))
-            warn.setText(f"Warnung: {kind} sollte eines dieser Formate sein: {allowed}")
-        else:
-            warn.setText("")
-
-    def _combo(self, key: str, options: list[tuple[str, object]], current, form, label):
+    def _combo(self, key: str, options: list[tuple], current, form, label: str):
         combo = QComboBox()
         for text, data in options:
             combo.addItem(text, data)
@@ -153,15 +104,12 @@ class AdminSettings(QWidget):
         combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._fields[key] = combo
         form.addRow(label, combo)
-        return combo
-
-    # ------------------------------------------------------------------
 
     def _build_tabs(self):
         cfg = self.app.config.settings
 
         # --- Startscreen ---
-        _, f = self._scroll_form()
+        f = self._scroll_form()
         bg = cfg.get("idle_background", {})
         self._combo("bg_type", [("Bild", "image"), ("Video", "video")],
                     bg.get("type", "image"), f, "Hintergrundtyp:")
@@ -169,24 +117,28 @@ class AdminSettings(QWidget):
                        "Hintergrunddatei:", _BG_EXTS, "Hintergrund")
 
         # --- Overlays (collage covers) ---
-        _, f = self._scroll_form()
-        f.addRow(QLabel("Collage-Overlays (PNG, 1800×1200 px):"))
+        f = self._scroll_form()
+        f.addRow(QLabel(f"Collage-Overlays (PNG, {COLLAGE_W}×{COLLAGE_H} px):"))
         covers = cfg.get("collage_covers", {})
         for n in range(1, 5):
             self._file_row(f"cover_{n}", covers.get(str(n), ""), f,
                            f"{n} Foto(s):", _PNG_EXTS, "Overlay")
 
         # --- Aufnahme ---
-        _, f = self._scroll_form()
+        f = self._scroll_form()
         sounds = cfg.get("system_sounds", {})
         self._file_row("shutter_click", sounds.get("shutter_click", ""), f,
-                       "Auslöser-Ton (NUR WAV):", _WAV_EXTS, "Auslöser-Ton")
+                       "Auslöser-Ton (WAV empfohlen):", _WAV_EXTS, "Auslöser-Ton")
         self._file_row("countdown_beep", sounds.get("countdown_beep", ""), f,
-                       "Countdown-Ton (NUR WAV):", _WAV_EXTS, "Countdown-Ton")
+                       "Countdown-Ton (WAV empfohlen):", _WAV_EXTS, "Countdown-Ton")
         timing = cfg.get("capture_timing", {})
         self._entry("t_preview", timing.get("initial_preview_seconds", 2.0), f,
                     "Vorschau-Dauer (s):")
         self._entry("t_countdown", timing.get("countdown_from", 3), f, "Countdown ab:")
+        self._combo("smile_enabled", [("Ja", True), ("Nein", False)],
+                    timing.get("smile_enabled", True), f, "Lächeln-Hinweis aktiv:")
+        self._entry("smile_text", timing.get("smile_text", "Lächeln!"), f,
+                    "Lächeln-Text:")
         self._entry("t_smile", timing.get("smile_duration", 0.8), f, "Lächeln-Dauer (s):")
         self._entry("t_post", timing.get("post_photo_pause", 2.0), f, "Pause nach Foto (s):")
         self._entry("t_flash", timing.get("flash_duration", 0.15), f, "Blitz-Dauer (s):")
@@ -194,14 +146,16 @@ class AdminSettings(QWidget):
                     cfg.get("flash_enabled", True), f, "Blitz-LED aktiv:")
 
         # --- Darstellung ---
-        _, f = self._scroll_form()
+        f = self._scroll_form()
         self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"), f,
                     "Ladebalken-Farbe (#RRGGBB):")
+        self._combo("progress_bar_enabled", [("Ja", True), ("Nein", False)],
+                    cfg.get("progress_bar_enabled", True), f, "Ladebalken anzeigen:")
         self._entry("screen_width", cfg.get("screen_width", 1920), f, "Bildschirmbreite:")
         self._entry("screen_height", cfg.get("screen_height", 1080), f, "Bildschirmhöhe:")
 
         # --- Gerät ---
-        _, f = self._scroll_form()
+        f = self._scroll_form()
         pins = cfg.get("gpio", {})
         self._entry("gpio_pin_start_button", pins.get("pin_start_button", 17), f, "GPIO Start-Button:")
         self._entry("gpio_pin_admin_button", pins.get("pin_admin_button", 27), f, "GPIO Admin-Button:")
@@ -209,47 +163,58 @@ class AdminSettings(QWidget):
         self._entry("gpio_pin_led_ready", pins.get("pin_led_ready", 23), f, "GPIO Ready-LED:")
         self._entry("printer_name", cfg.get("printer_name", "SELPHY"), f, "CUPS-Druckername:")
         self._entry("usb_mount", cfg.get("usb_mount", "/media/usb"), f, "USB-Mount-Pfad:")
+        self._combo("force_headphone_audio", [("Ja", True), ("Nein", False)],
+                    cfg.get("force_headphone_audio", True), f,
+                    "Audio auf Klinke zwingen:")
         self._combo("demo_mode", [("Aus", False), ("Ein", True)],
                     cfg.get("demo_mode", False), f, "Demo-Modus (kein Drucker):")
+
         cam_btn = QPushButton("Kamera testen")
-        cam_btn.setStyleSheet(_BTN)
+        cam_btn.setStyleSheet(theme.BTN_STYLE)
         cam_btn.clicked.connect(lambda: self.app.switch_screen("camera_test"))
         f.addRow("", cam_btn)
 
         usb_btn = QPushButton("USB-Stick vorbereiten")
-        usb_btn.setStyleSheet(_BTN)
-        usb_btn.setToolTip(
-            "Erstellt die Ordner 'Fotos' und 'Collagen' auf dem USB-Stick."
-        )
+        usb_btn.setStyleSheet(theme.BTN_STYLE)
+        usb_btn.setToolTip("Erstellt die Ordner 'Fotos' und 'Collagen' auf dem USB-Stick.")
         usb_btn.clicked.connect(self._prepare_usb)
         f.addRow("", usb_btn)
 
         # --- Sicherung ---
-        _, f = self._scroll_form()
+        f = self._scroll_form()
         f.addRow(QLabel("Konfiguration exportieren/importieren:"))
         exp = QPushButton("Konfiguration exportieren")
-        exp.setStyleSheet(_BTN)
+        exp.setStyleSheet(theme.BTN_STYLE)
         exp.clicked.connect(self._export_config)
         imp = QPushButton("Konfiguration importieren")
-        imp.setStyleSheet(_BTN)
+        imp.setStyleSheet(theme.BTN_STYLE)
         imp.clicked.connect(self._import_config)
         f.addRow("", exp)
         f.addRow("", imp)
 
     def _show_tab(self, idx: int):
+        self._active_idx = idx
         for i, b in self._tab_btns.items():
             b.setChecked(i == idx)
         self._stack.setCurrentIndex(idx)
 
     def refresh(self):
-        # Rebuild fields from current config (e.g. after import).
-        pass
+        """Rebuild all fields from the saved configuration."""
+        while self._stack.count():
+            w = self._stack.widget(0)
+            self._stack.removeWidget(w)
+            w.deleteLater()
+        self._fields.clear()
+        self._build_tabs()
+        self._show_tab(self._active_idx)
 
+    # ------------------------------------------------------------------
+    # Save
     # ------------------------------------------------------------------
 
     def _get(self, key: str, cast=str):
         w = self._fields.get(key)
-        if isinstance(w, QLineEdit):
+        if isinstance(w, (QLineEdit, FileSelectRow)):
             try:
                 return cast(w.text().strip())
             except (ValueError, AttributeError):
@@ -261,9 +226,9 @@ class AdminSettings(QWidget):
     def _save(self):
         cfg = self.app.config.settings
 
-        cfg.setdefault("idle_background", {})
-        cfg["idle_background"]["type"] = self._get("bg_type") or "image"
-        cfg["idle_background"]["file"] = self._get("bg_file") or ""
+        bg = cfg.setdefault("idle_background", {})
+        bg["type"] = self._get("bg_type") or "image"
+        bg["file"] = self._get("bg_file") or ""
 
         covers = cfg.setdefault("collage_covers", {})
         for n in range(1, 5):
@@ -277,12 +242,15 @@ class AdminSettings(QWidget):
         timing = cfg.setdefault("capture_timing", {})
         timing["initial_preview_seconds"] = self._get("t_preview", float) or 2.0
         timing["countdown_from"] = self._get("t_countdown", int) or 3
+        timing["smile_enabled"] = bool(self._get("smile_enabled"))
+        timing["smile_text"] = self._get("smile_text") or "Lächeln!"
         timing["smile_duration"] = self._get("t_smile", float) or 0.8
         timing["post_photo_pause"] = self._get("t_post", float) or 2.0
         timing["flash_duration"] = self._get("t_flash", float) or 0.15
         cfg["flash_enabled"] = bool(self._get("flash_enabled"))
 
         cfg["loading_bar_color"] = self._get("loading_bar_color") or "#FF6600"
+        cfg["progress_bar_enabled"] = bool(self._get("progress_bar_enabled"))
         sw = self._get("screen_width", int)
         sh = self._get("screen_height", int)
         if sw:
@@ -297,20 +265,10 @@ class AdminSettings(QWidget):
                 pins[key] = val
         cfg["printer_name"] = self._get("printer_name") or "SELPHY"
         cfg["usb_mount"] = self._get("usb_mount") or "/media/usb"
+        cfg["force_headphone_audio"] = bool(self._get("force_headphone_audio"))
         cfg["demo_mode"] = bool(self._get("demo_mode"))
 
         self.app.config.save_settings()
-        self.app.config.save_scenes()
-        self.app.config.save_paths()
-
-        # Warn if a system sound is not WAV.
-        for key, label in (("shutter_click", "Auslöser-Ton"), ("countdown_beep", "Countdown-Ton")):
-            val = sounds.get(key, "")
-            if val and Path(val).suffix.lower() != ".wav":
-                self.app.show_notification(
-                    f"{label}: '{val}' ist kein WAV – Systemtöne benötigen WAV-Format.",
-                    duration=8.0, level="warning")
-
         self.app.show_notification("Einstellungen gespeichert.", duration=3.0, level="info")
 
     def _validate_cover_size(self, rel: str, count: int):
@@ -336,6 +294,8 @@ class AdminSettings(QWidget):
         except IOError as e:
             self.app.show_notification(str(e), duration=8.0, level="error")
 
+    # ------------------------------------------------------------------
+    # Backup / restore
     # ------------------------------------------------------------------
 
     def _export_config(self):
@@ -373,6 +333,7 @@ class AdminSettings(QWidget):
             if "paths" in data:
                 self.app.config.paths = data["paths"]
                 self.app.config.save_paths()
+            self.refresh()
             self.app.show_notification(
                 "Konfiguration importiert. Bitte App neu starten.",
                 duration=8.0, level="info")

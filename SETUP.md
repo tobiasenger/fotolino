@@ -6,43 +6,50 @@ Dieses Dokument beschreibt die Vorbereitung der Entwicklungsumgebung, die Einric
 
 ---
 
-## 1. Projektstruktur (geplant)
+## 1. Projektstruktur
 
 ```
 fotobox/
 ├── SETUP.md                    # Dieses Dokument
-├── README.md
+├── FIX_AUDIO.md                # Audio-Fehlersuche auf dem Pi
 ├── .gitignore
 ├── requirements.txt
-├── config/
-│   ├── settings.json           # Globale Einstellungen (GPIO-Pins, Pfade, Farben, ...)
+├── config/                     # Wird auf dem Gerät verwaltet (nicht deployed)
+│   ├── settings.json           # Globale Einstellungen (GPIO-Pins, Sounds, Timing, ...)
 │   ├── scenes.json             # Gespeicherte Szenen (Greeting, Collage, Print)
 │   └── paths.json              # Konfigurierte Pfade mit Wahrscheinlichkeiten
 ├── src/
-│   ├── main.py                 # Einstiegspunkt, App-State-Machine
-│   ├── state.py                # Zentrale Zustandsverwaltung (ready, running, admin, ...)
+│   ├── main.py                 # Einstiegspunkt (Logging, QApplication, CLI-Args)
+│   ├── app.py                  # Hauptfenster: Services + Screen-Stack + Button-Logik
+│   ├── state.py                # Zentrale Zustandsverwaltung (AppState, AppContext)
+│   ├── constants.py            # Layouts, Zeiten, Schriften
+│   ├── config_manager.py       # Laden/Speichern der drei JSON-Configs (atomar)
 │   ├── ui/
+│   │   ├── base_screen.py      # Basisklasse: Lifecycle, Hintergrund, Szenen-Musik
+│   │   ├── theme.py            # Zentrale Styles und Farbpalette
+│   │   ├── widgets.py          # Wiederverwendbare UI-Elemente (Notification, Datei-Auswahl, ...)
+│   │   ├── video_widget.py     # Eingebettete VLC-Videofläche (geteilte Instanz)
 │   │   ├── screen_start.py     # Startscreen (Hintergrundbild/-video + Warte-Text)
 │   │   ├── screen_intro.py     # Intro-Szene (Bild/Video + Audio)
 │   │   ├── screen_capture.py   # Fotoaufnahme (Live-Preview, Countdown, Blitz)
-│   │   ├── screen_collage.py   # Collagenerstellung (Ladebalken, Vorschau)
+│   │   ├── screen_collage.py   # Collagenerstellung (Slideshow, Hintergrund-Worker)
 │   │   ├── screen_print.py     # Druckscreen (Ladebalken, Collage-Vorschau, Audio)
-│   │   ├── admin/
-│   │   │   ├── admin_main.py   # Admin-Hauptmenü (Navigation zwischen Sub-Views)
-│   │   │   ├── admin_paths.py  # Pfad-Übersicht und -Editor
-│   │   │   ├── admin_scenes.py # Szenen-Erstellung und -Verwaltung
-│   │   │   └── admin_settings.py # Allgemeine Einstellungen
-│   │   └── widgets.py          # Wiederverwendbare UI-Elemente (Buttons, Dropdowns, ...)
-│   ├── camera.py               # Kamerasteuerung (picamera2)
+│   │   ├── screen_camera_test.py # Kameratest aus dem Admin-Bereich
+│   │   └── admin/
+│   │       ├── admin_main.py   # Admin-Hauptmenü (Navigation zwischen Sub-Views)
+│   │       ├── admin_paths.py  # Pfad-Übersicht und -Editor
+│   │       ├── admin_scenes.py # Szenen-Erstellung und -Verwaltung
+│   │       └── admin_settings.py # Allgemeine Einstellungen
+│   ├── camera.py               # Kamerasteuerung (picamera2, Mock-Fallback)
 │   ├── gpio_handler.py         # GPIO-Buttons und LEDs (Flash-LED + Ready-LED)
-│   ├── audio.py                # Audiowiedergabe (MP3)
+│   ├── audio.py                # Audiowiedergabe (aplay/VLC/QSoundEffect, siehe FIX_AUDIO.md)
 │   ├── collage.py              # Collagenerstellung (Pillow)
 │   ├── printer.py              # Drucksteuerung (CUPS/pycups)
 │   └── storage.py              # USB-Stick-Verwaltung
 ├── assets/
-│   ├── CollageCovers/          # PNG-Vorlagen (cover_1.png – cover_4.png)
+│   ├── CollageCovers/          # PNG-Vorlagen (1800×1200, Transparenz)
 │   ├── backgrounds/            # Hintergrundbilder/-videos für den Startscreen
-│   ├── sounds/                 # MP3-Dateien für Szenen
+│   ├── sounds/                 # Audiodateien für Szenen (WAV/MP3/OGG)
 │   ├── images/                 # Bilder für Szenen (Intro-Screens)
 │   └── videos/                 # Videodateien für Szenen
 └── deploy/
@@ -379,6 +386,10 @@ sudo usermod -aG gpio admin
    ```bash
    sudo apt install -y python3-pyqt6 python3-pyqt6.qtmultimedia vlc python3-vlc
    ```
+   **Wichtig:** Ohne `python3-vlc` bleibt sämtliches Szenen-Audio stumm –
+   die App zeigt dann beim Start eine Warnung an.
+4. Wenn kein Ton aus der App kommt, obwohl `aplay` im Terminal funktioniert:
+   Schritt-für-Schritt-Diagnose in **FIX_AUDIO.md**.
 
 ### 5.6 Drucker einrichten (Canon SELPHY CP1500)
 

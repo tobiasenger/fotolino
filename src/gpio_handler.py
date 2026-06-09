@@ -28,6 +28,8 @@ class GPIOHandler:
         self._callback = button_callback
         pins = config_manager.gpio_pins()
         self._flash_enabled = config_manager.settings.get("flash_enabled", True)
+        self._start_btn = None
+        self._admin_btn = None
 
         if _GPIO_AVAILABLE:
             try:
@@ -72,3 +74,10 @@ class GPIOHandler:
     def cleanup(self):
         self.set_flash_led(False)
         self.set_ready_led(False)
+        for dev in (self._start_btn, self._admin_btn, self._led_flash, self._led_ready):
+            close = getattr(dev, "close", None)
+            if close:
+                try:
+                    close()
+                except Exception:
+                    pass

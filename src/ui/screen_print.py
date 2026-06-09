@@ -1,25 +1,27 @@
 """
-Print screen – shows the collage with a loading bar for the print duration (default 40 s).
-Sends the collage to the printer in a background thread and returns to start when done.
+Print screen – shows the collage with a loading bar for the print duration.
+Sends the collage to the printer in a background thread and returns to the
+start screen when the duration has elapsed.
 """
+from __future__ import annotations
+
 import logging
 import threading
 import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPainter, QColor, QFont, QPixmap
+from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtWidgets import QProgressBar
 
+from ..constants import FONT_SMALL, SCENE_PRINT_DURATION
+from . import theme
 from .base_screen import BaseScreen
-from ..constants import COLOR_BG, FONT_SMALL, SCENE_PRINT_DURATION
+from .widgets import draw_shadow_text
 
 logger = logging.getLogger(__name__)
 
-_BAR_STYLE = """
-QProgressBar {{ border: 2px solid #333; border-radius: 5px; background: #282828; height: 24px; }}
-QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}
-"""
+STATUS_TEXT = "Dein Foto wird gedruckt…"
 
 
 class PrintScreen(BaseScreen):
@@ -28,8 +30,6 @@ class PrintScreen(BaseScreen):
         self._scene: dict | None = None
         self._duration = float(SCENE_PRINT_DURATION)
         self._collage_pixmap: QPixmap | None = None
-        self._bg_pixmap: QPixmap | None = None
-        self._scaled_bg: QPixmap | None = None
         self._print_sent = False
         self._start_time = 0.0
 
@@ -45,29 +45,27 @@ class PrintScreen(BaseScreen):
 
     def on_enter(self):
         ctx = self.app.context
+        cfg = self.app.config
         self._print_sent = False
         self._collage_pixmap = None
 
         scene_id = ctx.print_scene_id()
-        self._scene = self.app.config.get_scene_by_id(scene_id) if scene_id else None
+        self._scene = cfg.get_scene_by_id(scene_id) if scene_id else None
         self._duration = float(self._scene.get("duration", SCENE_PRINT_DURATION)) \
             if self._scene else float(SCENE_PRINT_DURATION)
 
         self._load_collage()
-        self._load_bg()
-
         if self._scene and self._scene.get("media_type") == "photo":
-            audio = self._scene.get("audio", "")
-            if audio:
-                p = self.app.config.resolve_asset(audio)
-                if p.exists():
-                    self.app.audio.play_music(p)
+            self._set_background(self._load_pixmap(self._scene.get("image", "")))
+        else:
+            self._set_background(None)
+        self._start_scene_music(self._scene)
 
-        color = self.app.config.settings.get("loading_bar_color", "#FF6600")
-        self._progress.setStyleSheet(_BAR_STYLE.format(color=color))
+        self._progress.setStyleSheet(theme.progress_bar_style(
+            cfg.settings.get("loading_bar_color", "#FF6600")))
         self._progress.setValue(0)
         self._position_progress()
-        self._progress.show()
+        self._progress.setVisible(cfg.settings.get("progress_bar_enabled", True))
         self._progress.raise_()
 
         self._send_print()
@@ -90,9 +88,8 @@ class PrintScreen(BaseScreen):
             self.transition_to("start")
 
     def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._scaled_bg = None
         self._position_progress()
+        super().resizeEvent(event)
 
     def _position_progress(self):
         w, h = self.width(), self.height()
@@ -103,30 +100,19 @@ class PrintScreen(BaseScreen):
         painter = QPainter(self)
         w, h = self.width(), self.height()
 
-        if self._bg_pixmap:
-            if self._scaled_bg is None or self._scaled_bg.size() != self.size():
-                self._scaled_bg = self._scaled_cover(self._bg_pixmap, w, h)
-            painter.drawPixmap((w - self._scaled_bg.width()) // 2,
-                               (h - self._scaled_bg.height()) // 2, self._scaled_bg)
-        else:
-            painter.fillRect(self.rect(), QColor(*COLOR_BG))
+        self._paint_background(painter)
 
         if self._collage_pixmap:
-            max_w = int(w * 0.80)
-            max_h = int(h * 0.70)
             scaled = self._collage_pixmap.scaled(
-                max_w, max_h, Qt.AspectRatioMode.KeepAspectRatio,
+                int(w * 0.80), int(h * 0.70),
+                Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
             painter.drawPixmap((w - scaled.width()) // 2,
                                (h - scaled.height()) // 2 - 40, scaled)
 
-        font = QFont("DejaVu Sans", FONT_SMALL)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(0, 0, 0))
-        painter.drawText(2, h - 68 + 2, w, 40, Qt.AlignmentFlag.AlignHCenter, "Dein Foto wird gedruckt…")
-        painter.setPen(QColor(230, 230, 230))
-        painter.drawText(0, h - 68, w, 40, Qt.AlignmentFlag.AlignHCenter, "Dein Foto wird gedruckt…")
+        draw_shadow_text(painter, 0, h - 68, w, 40, STATUS_TEXT,
+                         FONT_SMALL, (230, 230, 230),
+                         align=Qt.AlignmentFlag.AlignHCenter)
         painter.end()
 
     # ------------------------------------------------------------------
@@ -140,12 +126,6 @@ class PrintScreen(BaseScreen):
             self._collage_pixmap = pix
         else:
             logger.warning("Cannot load collage for display: %s", path)
-
-    def _load_bg(self):
-        self._bg_pixmap = None
-        self._scaled_bg = None
-        if self._scene and self._scene.get("media_type") == "photo":
-            self._bg_pixmap = self._load_pixmap(self._scene.get("image", ""))
 
     def _send_print(self):
         if self._print_sent:
@@ -163,7 +143,7 @@ class PrintScreen(BaseScreen):
                 self.app.show_notification(
                     "Druckfehler: Drucker nicht erreichbar. "
                     "Verbindung, Papier und CUPS-Status prüfen.",
-                    duration=10.0, level="error"
+                    duration=10.0, level="error",
                 )
 
         threading.Thread(target=do_print, daemon=True).start()

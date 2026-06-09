@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+assets/
+.git/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.mp3
+*.mp4

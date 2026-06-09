@@ -1,7 +1,22 @@
+"""
+Configuration persistence for the Fotobox.
+
+Three JSON files live in config/:
+  * settings.json – device/app settings (GPIO pins, sounds, timing, …)
+  * scenes.json   – scene definitions (greeting / collage / print media)
+  * paths.json    – weighted "paths" combining scenes into a session flow
+
+Missing keys are filled in from the defaults (recursively), so new settings
+can be added in code without breaking existing installations. All writes are
+atomic (tmp file + rename) so a power loss never corrupts the config.
+"""
+from __future__ import annotations
+
 import json
+import logging
+import os
 import random
 import uuid
-import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -11,7 +26,7 @@ CONFIG_DIR = BASE_DIR / "config"
 ASSETS_DIR = BASE_DIR / "assets"
 
 
-def _default_settings():
+def _default_settings() -> dict:
     return {
         "gpio": {
             "pin_start_button": 17,
@@ -28,11 +43,11 @@ def _default_settings():
         "screen_width": 1920,
         "screen_height": 1080,
         "fullscreen": True,
+        "force_headphone_audio": True,
         "system_sounds": {
-            "shutter_click": "assets/sounds/click.mp3",
+            "shutter_click": "",
             "countdown_beep": "",
         },
-        "capture_overlay": "",
         "capture_timing": {
             "initial_preview_seconds": 2.0,
             "countdown_from": 3,
@@ -47,37 +62,57 @@ def _default_settings():
     }
 
 
+def _merge_defaults(data: dict, defaults: dict) -> dict:
+    """Recursively add missing default keys to data (in place)."""
+    for key, default_value in defaults.items():
+        if key not in data:
+            data[key] = default_value
+        elif isinstance(default_value, dict) and isinstance(data[key], dict):
+            _merge_defaults(data[key], default_value)
+    return data
+
+
 class ConfigManager:
     def __init__(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        self.settings = self._load_or_create("settings.json", _default_settings())
-        self.scenes   = self._load_or_create("scenes.json",   {"scenes": []})
-        self.paths    = self._load_or_create("paths.json",    {"paths": []})
+        self.settings: dict = {}
+        self.scenes: dict = {}
+        self.paths: dict = {}
+        self.reload()
 
     # ------------------------------------------------------------------
     # Load / save
     # ------------------------------------------------------------------
 
-    def _load_or_create(self, filename, default):
+    def reload(self):
+        """(Re-)read all three config files from disk (e.g. after import)."""
+        self.settings = self._load_or_create("settings.json", _default_settings())
+        self.scenes = self._load_or_create("scenes.json", {"scenes": []})
+        self.paths = self._load_or_create("paths.json", {"paths": []})
+
+    def _load_or_create(self, filename: str, default: dict) -> dict:
         path = CONFIG_DIR / filename
         if path.exists():
             try:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
-                if isinstance(data, dict) and isinstance(default, dict):
-                    for k, v in default.items():
-                        if k not in data:
-                            data[k] = v
-                return data
+                if isinstance(data, dict):
+                    return _merge_defaults(data, default)
+                logger.warning("%s has unexpected structure, using defaults", filename)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Could not load %s (%s), using defaults", filename, e)
         self._save_raw(filename, default)
         return default
 
-    def _save_raw(self, filename, data):
+    def _save_raw(self, filename: str, data: dict):
+        """Atomic write: never leaves a half-written file behind on power loss."""
         path = CONFIG_DIR / filename
-        with open(path, "w", encoding="utf-8") as f:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
 
     def save_settings(self):
         self._save_raw("settings.json", self.settings)
@@ -108,7 +143,7 @@ class ConfigManager:
         self.save_scenes()
         return scene_id
 
-    def update_scene(self, scene_id: str, updated: dict):
+    def update_scene(self, scene_id: str, updated: dict) -> bool:
         for i, s in enumerate(self.scenes["scenes"]):
             if s.get("id") == scene_id:
                 updated["id"] = scene_id
@@ -127,9 +162,7 @@ class ConfigManager:
         result = []
         for p in self.paths["paths"]:
             scenes = p.get("scenes", {})
-            if scenes.get("greeting") == scene_id or \
-               scenes.get("collage")  == scene_id or \
-               scenes.get("print")    == scene_id:
+            if scene_id in (scenes.get("greeting"), scenes.get("collage"), scenes.get("print")):
                 result.append(p)
         return result
 
@@ -165,7 +198,7 @@ class ConfigManager:
         self.save_paths()
         return path_id
 
-    def update_path(self, path_id: str, updated: dict):
+    def update_path(self, path_id: str, updated: dict) -> bool:
         for i, p in enumerate(self.paths["paths"]):
             if p.get("id") == path_id:
                 updated["id"] = path_id
@@ -193,12 +226,11 @@ class ConfigManager:
         paths = self.paths["paths"]
         if not paths:
             return None
-        weights = []
-        for p in paths:
-            if p.get("is_default"):
-                weights.append(self.compute_default_probability())
-            else:
-                weights.append(p.get("probability", 0))
+        weights = [
+            self.compute_default_probability() if p.get("is_default")
+            else p.get("probability", 0)
+            for p in paths
+        ]
         if sum(weights) == 0:
             return paths[0]
         return random.choices(paths, weights=weights, k=1)[0]
@@ -209,7 +241,7 @@ class ConfigManager:
 
     def loading_bar_color_rgb(self) -> tuple:
         hex_color = self.settings.get("loading_bar_color", "#FF6600").lstrip("#")
-        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
     def gpio_pins(self) -> dict:
         return self.settings.get("gpio", {})
@@ -221,17 +253,9 @@ class ConfigManager:
     def cover_path(self, count: int) -> str:
         return self.settings.get("collage_covers", {}).get(str(count), "")
 
-    def reload(self):
-        """Re-read all three config files from disk (e.g. after import)."""
-        self.settings = self._load_or_create("settings.json", _default_settings())
-        self.scenes   = self._load_or_create("scenes.json",   {"scenes": []})
-        self.paths    = self._load_or_create("paths.json",    {"paths": []})
-
     def resolve_asset(self, relative_path: str) -> Path:
-        """Resolve a path relative to project root."""
+        """Resolve a path relative to the project root (absolute paths pass through)."""
         if not relative_path:
             return Path()
         p = Path(relative_path)
-        if p.is_absolute():
-            return p
-        return BASE_DIR / p
+        return p if p.is_absolute() else BASE_DIR / p

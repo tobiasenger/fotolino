@@ -1,12 +1,14 @@
-# Screen resolution
+"""Application-wide constants (display geometry, collage layouts, timing, fonts)."""
+
+# Screen resolution (fallback if not configured in settings.json)
 SCREEN_W = 1920
 SCREEN_H = 1080
 
-# Collage canvas
+# Collage canvas (must match the printable area / overlay PNGs)
 COLLAGE_W = 1800
 COLLAGE_H = 1200
 
-# Collage photo bounding boxes per capture count
+# Collage photo bounding boxes per capture count.
 # Each slot: (x, y, w, h, rotation_degrees)
 COLLAGE_LAYOUTS = {
     1: [
@@ -29,35 +31,18 @@ COLLAGE_LAYOUTS = {
     ],
 }
 
-# UI Colors
-COLOR_BG         = (10, 10, 20)
-COLOR_BG_DARK    = (5, 5, 10)
-COLOR_TEXT       = (255, 255, 255)
-COLOR_TEXT_DIM   = (180, 180, 180)
-COLOR_ACCENT     = (255, 102, 0)
-COLOR_SUCCESS    = (80, 200, 80)
-COLOR_ERROR      = (220, 60, 60)
-COLOR_WHITE      = (255, 255, 255)
-COLOR_BLACK      = (0, 0, 0)
-COLOR_OVERLAY    = (0, 0, 0, 160)     # semi-transparent black
-COLOR_FLASH      = (255, 255, 255)
-
-# Admin UI colors
-ADMIN_BG         = (20, 20, 35)
-ADMIN_PANEL      = (30, 30, 50)
-ADMIN_HIGHLIGHT  = (50, 50, 80)
-ADMIN_TAB_ACTIVE = (255, 102, 0)
-ADMIN_TAB_IDLE   = (40, 40, 65)
+# Base background color used when a screen has no background image
+COLOR_BG = (10, 10, 20)
 
 # Scene duration limits (seconds)
 SCENE_GREETING_MIN = 5
 SCENE_GREETING_MAX = 20
 SCENE_COLLAGE_DURATION = 10
-SCENE_PRINT_DURATION   = 40
+SCENE_PRINT_DURATION = 40
 
-# Font sizes
-FONT_HUGE    = 180
-FONT_LARGE   = 90
-FONT_MEDIUM  = 54
-FONT_SMALL   = 36
-FONT_TINY    = 24
+# Typography
+FONT_FAMILY = "DejaVu Sans"
+FONT_HUGE = 180
+FONT_LARGE = 90
+FONT_MEDIUM = 54
+FONT_SMALL = 36

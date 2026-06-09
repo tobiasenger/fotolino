@@ -11,14 +11,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-_BTN = (
-    "QPushButton { background: #2a2a50; color: white; border: 1px solid #444488; "
-    "border-radius: 5px; padding: 8px 14px; } QPushButton:hover { border-color: #ff6600; }"
-)
-_DEL = (
-    "QPushButton { background: #5a2030; color: white; border: 1px solid #884444; "
-    "border-radius: 5px; padding: 8px 14px; } QPushButton:hover { border-color: #ff6600; }"
-)
+from .. import theme
+
 _CAPTURE_OPTS = [
     ("0 – Nur Begrüßung", 0), ("1 Foto", 1), ("2 Fotos", 2),
     ("3 Fotos", 3), ("4 Fotos", 4),
@@ -43,10 +37,10 @@ class AdminPaths(QWidget):
 
         btn_row = QHBoxLayout()
         add_btn = QPushButton("+ Neuer Pfad")
-        add_btn.setStyleSheet(_BTN)
+        add_btn.setStyleSheet(theme.BTN_STYLE)
         add_btn.clicked.connect(self._new_path)
         self._del_btn = QPushButton("Löschen")
-        self._del_btn.setStyleSheet(_DEL)
+        self._del_btn.setStyleSheet(theme.DEL_BTN_STYLE)
         self._del_btn.clicked.connect(self._delete_selected)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(self._del_btn)
@@ -91,7 +85,7 @@ class AdminPaths(QWidget):
         self._form.addRow("Druck-Szene (bei ≥1 Foto):", self._print)
 
         save = QPushButton("Speichern")
-        save.setStyleSheet(_BTN)
+        save.setStyleSheet(theme.BTN_STYLE)
         save.clicked.connect(self._save)
         self._save_btn = save
         self._form.addRow("", save)

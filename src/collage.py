@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 
@@ -22,14 +24,14 @@ def _crop_to_fill(img: Image.Image, target_w: int, target_h: int, rotation: int 
         # Wider than target: fit height, crop width
         scale  = target_h / src_h
         new_w  = int(src_w * scale)
-        img    = img.resize((new_w, target_h), Image.LANCZOS)
+        img    = img.resize((new_w, target_h), Image.Resampling.LANCZOS)
         x_off  = (new_w - target_w) // 2
         img    = img.crop((x_off, 0, x_off + target_w, target_h))
     else:
         # Taller than target: fit width, crop height
         scale  = target_w / src_w
         new_h  = int(src_h * scale)
-        img    = img.resize((target_w, new_h), Image.LANCZOS)
+        img    = img.resize((target_w, new_h), Image.Resampling.LANCZOS)
         y_off  = (new_h - target_h) // 2
         img    = img.crop((0, y_off, target_w, y_off + target_h))
 
@@ -72,7 +74,7 @@ class CollageCreator:
                             "Cover %s is %dx%d (expected %dx%d) – auto-scaling",
                             cover_path, overlay.size[0], overlay.size[1], COLLAGE_W, COLLAGE_H,
                         )
-                        overlay = overlay.resize((COLLAGE_W, COLLAGE_H), Image.LANCZOS)
+                        overlay = overlay.resize((COLLAGE_W, COLLAGE_H), Image.Resampling.LANCZOS)
                     canvas_rgba = canvas.convert("RGBA")
                     combined    = Image.alpha_composite(canvas_rgba, overlay)
                     canvas      = combined.convert("RGB")

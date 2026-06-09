@@ -2,31 +2,35 @@
 Capture screen – live mirrored camera preview with countdown and photo capture.
 Flash LED is ON for the entire duration of this screen.
 
-Preview: polls camera.get_qpixmap() via a 50 ms QTimer.
+Preview: polls camera.get_qpixmap() via a 50 ms QTimer and draws it with fast
+scaling (smooth scaling at 20 fps is too expensive on a Pi 4).
 QGlPicamera2 is intentionally not used – it causes an OpenGL/EGL abort with
 Camera Module v2 on Raspberry Pi 4 regardless of initialisation order.
 """
+from __future__ import annotations
+
+import logging
+import tempfile
+import time
 from enum import Enum, auto
 from pathlib import Path
-import logging
-import time
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPainter, QColor, QFont, QPixmap
-from PyQt6.QtWidgets import QLabel
+from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QColor, QPainter, QPixmap
 
+from ..constants import FONT_HUGE, FONT_LARGE, FONT_SMALL
 from .base_screen import BaseScreen
-from ..constants import FONT_HUGE, FONT_LARGE
+from .widgets import draw_shadow_text
 
 logger = logging.getLogger(__name__)
 
 
 class _Phase(Enum):
-    PREVIEW   = auto()
+    PREVIEW = auto()
     COUNTDOWN = auto()
-    SMILE     = auto()
-    FLASH     = auto()
-    POST      = auto()
+    SMILE = auto()
+    FLASH = auto()
+    POST = auto()
 
 
 class CaptureScreen(BaseScreen):
@@ -37,7 +41,7 @@ class CaptureScreen(BaseScreen):
         self._photo_idx = 0
         self._total_photos = 0
         self._timing: dict = {}
-
+        self._countdown_value: int | None = None
         self._preview_pixmap: QPixmap | None = None
 
         self._timer = QTimer(self)
@@ -47,11 +51,9 @@ class CaptureScreen(BaseScreen):
     # ------------------------------------------------------------------
 
     def on_enter(self):
-        ctx = self.app.context
-        cfg = self.app.config
-        self._total_photos = ctx.capture_count()
+        self._total_photos = self.app.context.capture_count()
         self._photo_idx = 0
-        self._timing = cfg.settings.get("capture_timing", {})
+        self._timing = self.app.config.settings.get("capture_timing", {})
         self._set_phase(_Phase.PREVIEW)
 
         self.app.gpio.set_flash_led(True)
@@ -75,6 +77,8 @@ class CaptureScreen(BaseScreen):
     def _set_phase(self, phase: _Phase):
         self._phase = phase
         self._phase_start = time.monotonic()
+        if phase == _Phase.COUNTDOWN:
+            self._countdown_value = None
 
     def _elapsed(self) -> float:
         return time.monotonic() - self._phase_start
@@ -83,17 +87,25 @@ class CaptureScreen(BaseScreen):
         cfg = self._timing
         preview_dur = cfg.get("initial_preview_seconds", 2.0)
         countdown_n = int(cfg.get("countdown_from", 3))
-        smile_dur   = cfg.get("smile_duration", 0.8)
-        post_dur    = cfg.get("post_photo_pause", 2.0)
-        flash_dur   = cfg.get("flash_duration", 0.15)
+        smile_dur = cfg.get("smile_duration", 0.8)
+        post_dur = cfg.get("post_photo_pause", 2.0)
+        flash_dur = cfg.get("flash_duration", 0.15)
         t = self._elapsed()
 
         if self._phase == _Phase.PREVIEW:
             if t >= preview_dur:
                 self._set_phase(_Phase.COUNTDOWN)
         elif self._phase == _Phase.COUNTDOWN:
+            remaining = max(1, countdown_n - int(t))
+            if remaining != self._countdown_value:
+                self._countdown_value = remaining
+                self._play_sound("countdown_beep")
             if t >= countdown_n:
-                self._set_phase(_Phase.SMILE)
+                if cfg.get("smile_enabled", True):
+                    self._set_phase(_Phase.SMILE)
+                else:
+                    self._do_capture()
+                    self._set_phase(_Phase.FLASH)
         elif self._phase == _Phase.SMILE:
             if t >= smile_dur:
                 self._do_capture()
@@ -128,62 +140,55 @@ class CaptureScreen(BaseScreen):
             return
 
         if self._preview_pixmap:
-            scaled = self._scaled_cover(self._preview_pixmap, w, h)
-            x = (w - scaled.width()) // 2
-            y = (h - scaled.height()) // 2
-            painter.drawPixmap(x, y, scaled)
+            self._draw_cover(painter, self._preview_pixmap, fast=True)
         else:
-            painter.fillRect(self.rect(), QColor(10, 10, 20))
+            self._paint_background(painter)
 
         self._draw_hud(painter, w, h)
         painter.end()
 
     def _draw_hud(self, painter: QPainter, w: int, h: int):
-        cfg = self._timing
-        countdown_n = int(cfg.get("countdown_from", 3))
-        cx, cy = w // 2, h // 2
-
-        def draw_text(text, size, color, y_center, bold=True):
-            font = QFont("DejaVu Sans", size)
-            font.setBold(bold)
-            painter.setFont(font)
-            rect = (0, y_center - size - 10, w, size * 2 + 20)
-            painter.setPen(QColor(0, 0, 0))
-            painter.drawText(rect[0] + 3, rect[1] + 3, rect[2], rect[3],
-                             Qt.AlignmentFlag.AlignCenter, text)
-            painter.setPen(QColor(*color))
-            painter.drawText(rect[0], rect[1], rect[2], rect[3],
-                             Qt.AlignmentFlag.AlignCenter, text)
+        cy = h // 2
 
         if self._phase == _Phase.PREVIEW:
-            draw_text(f"Foto {self._photo_idx + 1} von {self._total_photos}",
-                      36, (255, 255, 255), h - 80)
+            self._draw_centered(painter, w, h - 80, FONT_SMALL,
+                                (255, 255, 255),
+                                f"Foto {self._photo_idx + 1} von {self._total_photos}")
         elif self._phase == _Phase.COUNTDOWN:
-            remaining = max(1, countdown_n - int(self._elapsed()))
-            draw_text(str(remaining), FONT_HUGE, (255, 255, 255), cy)
+            self._draw_centered(painter, w, cy, FONT_HUGE, (255, 255, 255),
+                                str(self._countdown_value or 1))
         elif self._phase == _Phase.SMILE:
-            draw_text("Lächeln!", FONT_LARGE, (255, 230, 0), cy)
+            text = self._timing.get("smile_text", "Lächeln!")
+            self._draw_centered(painter, w, cy, FONT_LARGE, (255, 230, 0), text)
         elif self._phase == _Phase.POST:
-            draw_text(f"Foto {self._photo_idx + 1} von {self._total_photos} aufgenommen",
-                      36, (200, 255, 200), h - 80)
+            self._draw_centered(painter, w, h - 80, FONT_SMALL, (200, 255, 200),
+                                f"Foto {self._photo_idx + 1} von {self._total_photos} aufgenommen")
+
+    @staticmethod
+    def _draw_centered(painter, w, y_center, size, color, text):
+        draw_shadow_text(painter, 0, y_center - size - 10, w, size * 2 + 20,
+                         text, size, color)
 
     # ------------------------------------------------------------------
 
+    def _play_sound(self, key: str):
+        sound = self.app.config.settings.get("system_sounds", {}).get(key, "")
+        if sound:
+            self.app.audio.play_sfx(self.app.config.resolve_asset(sound))
+
     def _do_capture(self):
         frame = self.app.camera.capture_photo()
-
         try:
             path = self.app.storage.save_photo(frame, self._photo_idx)
         except IOError as e:
+            # Keep the session alive: park the photo in /tmp so the collage
+            # can still be built and shown even without the USB stick.
             self.app.show_notification(str(e), duration=8.0, level="error")
-            import tempfile
-            from PIL import Image as _Img
-            tmp = Path(tempfile.mktemp(suffix=".jpg"))
-            _Img.fromarray(frame, "RGB").save(tmp, "JPEG", quality=95)
-            path = tmp
+            from PIL import Image
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                Image.fromarray(frame, "RGB").save(tmp, "JPEG", quality=95)
+                path = Path(tmp.name)
+            logger.warning("Photo parked in temp file: %s", path)
 
         self.app.context.captured_photos.append(path)
-
-        click = self.app.config.settings.get("system_sounds", {}).get("shutter_click", "")
-        if click:
-            self.app.audio.play_sfx(self.app.config.resolve_asset(click))
+        self._play_sound("shutter_click")
