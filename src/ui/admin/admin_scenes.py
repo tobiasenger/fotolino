@@ -4,8 +4,12 @@ Sub-tab bar (Begrüßung / Collage / Druck), scene list, and an editor form
 with file-browse rows and media-format validation.
 
 Scene audio plays via VLC → WAV + MP3 + OGG allowed.
-Scene video plays via VLC → MP4 + AVI + MOV allowed.
-Duration is derived from the media file and validated against per-type limits.
+Scene video plays via VLC → MP4 + AVI + MOV allowed (greeting only).
+Media duration is derived from the file and validated against the duration
+limits configured in the admin settings ("Zeiten" tab):
+  * greeting – media duration must lie within [min, max]
+  * collage / print – image+audio only; the screen runs for the fixed
+    configured duration, the audio may be at most that long
 """
 from __future__ import annotations
 
@@ -16,20 +20,11 @@ from PyQt6.QtWidgets import (
 )
 
 from ...audio import AudioPlayer
-from ...constants import (
-    SCENE_COLLAGE_DURATION, SCENE_GREETING_MAX, SCENE_GREETING_MIN,
-    SCENE_PRINT_DURATION,
-)
 from .. import theme
 from ..widgets import FileSelectRow
 
 _SCENE_TYPES = ["greeting", "collage", "print"]
 _SCENE_LABELS = {"greeting": "Begrüßung", "collage": "Collage", "print": "Druck"}
-_DURATION_LIMITS = {
-    "greeting": (SCENE_GREETING_MIN, SCENE_GREETING_MAX),
-    "collage": (1, SCENE_COLLAGE_DURATION),
-    "print": (1, SCENE_PRINT_DURATION),
-}
 
 _AUDIO_EXTS = {".wav", ".mp3", ".ogg"}
 _VIDEO_EXTS = {".mp4", ".avi", ".mov"}
@@ -107,7 +102,8 @@ class AdminScenes(QWidget):
         self._video = FileSelectRow(cfg, _VIDEO_EXTS, "Video")
 
         self._form.addRow("Name:", self._name)
-        self._form.addRow("Medientyp:", self._media)
+        self._lbl_media = QLabel("Medientyp:")
+        self._form.addRow(self._lbl_media, self._media)
         self._lbl_image = QLabel("Bilddatei (.jpg/.png):")
         self._form.addRow(self._lbl_image, self._image)
         self._lbl_audio = QLabel("Audiodatei (.wav/.mp3/.ogg):")
@@ -115,10 +111,9 @@ class AdminScenes(QWidget):
         self._lbl_video = QLabel("Videodatei (.mp4/.avi/.mov):")
         self._form.addRow(self._lbl_video, self._video)
 
-        info = QLabel("→ Pfad relativ zum Projektordner, z.B. assets/sounds/welcome.mp3.\n"
-                      "Dauer wird automatisch aus der Mediendatei berechnet.")
-        info.setWordWrap(True)
-        self._form.addRow(info)
+        self._info = QLabel()
+        self._info.setWordWrap(True)
+        self._form.addRow(self._info)
 
         save = QPushButton("Speichern")
         save.setStyleSheet(theme.BTN_STYLE)
@@ -126,14 +121,33 @@ class AdminScenes(QWidget):
         self._form.addRow("", save)
 
     def _update_field_visibility(self):
-        is_photo = self._media.currentData() == "photo"
+        # Video is only available for greeting scenes; collage and print
+        # are always image + audio with a fixed configured duration.
+        allow_video = self._active_type == "greeting"
+        is_photo = not allow_video or self._media.currentData() == "photo"
         for label, row, visible in (
+            (self._lbl_media, self._media, allow_video),
             (self._lbl_image, self._image, is_photo),
             (self._lbl_audio, self._audio, is_photo),
             (self._lbl_video, self._video, not is_photo),
         ):
             label.setVisible(visible)
             row.setVisible(visible)
+        self._update_info_text()
+
+    def _update_info_text(self):
+        d = self.app.config.scene_durations()
+        base = "→ Pfad relativ zum Projektordner, z.B. assets/sounds/welcome.mp3."
+        if self._active_type == "greeting":
+            hint = (f"Die Mediendauer (Audio/Video) muss zwischen "
+                    f"{d['greeting_min']:g} und {d['greeting_max']:g} Sekunden "
+                    f"liegen (einstellbar unter Einstellungen → Zeiten).")
+        else:
+            fixed = d[self._active_type]
+            hint = (f"Die Szene dauert fest {fixed:g} Sekunden (einstellbar unter "
+                    f"Einstellungen → Zeiten). Das Audio spielt einmal bis zum "
+                    f"Ende und darf höchstens {fixed:g} Sekunden lang sein.")
+        self._info.setText(f"{base}\n{hint}")
 
     # ------------------------------------------------------------------
 
@@ -142,6 +156,7 @@ class AdminScenes(QWidget):
             b.setChecked(k == self._active_type)
         self._reload_list()
         self._editing_id = None
+        self._update_field_visibility()
         self._set_editor_enabled(False)
 
     def _switch_type(self, key: str):
@@ -153,7 +168,11 @@ class AdminScenes(QWidget):
         for s in self.app.config.get_scenes_by_type(self._active_type):
             mt = "Foto" if s.get("media_type") == "photo" else "Video"
             dur = s.get("duration", 0)
-            item = QListWidgetItem(f"{s.get('name', '(kein Name)')}  |  {mt}  |  {dur:.1f}s")
+            if self._active_type == "greeting":
+                detail = f"{mt}  |  {dur:.1f}s"
+            else:
+                detail = f"Audio {dur:.1f}s" if dur else "ohne Audio"
+            item = QListWidgetItem(f"{s.get('name', '(kein Name)')}  |  {detail}")
             item.setData(Qt.ItemDataRole.UserRole, s["id"])
             self._list.addItem(item)
 
@@ -195,7 +214,11 @@ class AdminScenes(QWidget):
             if audio:
                 dur = AudioPlayer.get_audio_duration(self.app.config.resolve_asset(audio))
                 return dur or 0.0
-            return float(_DURATION_LIMITS[scene_type][0])
+            # Greeting without audio: the screen still has to fill the
+            # configured minimum. Collage/print without audio: silence (0s).
+            if scene_type == "greeting":
+                return self.app.config.scene_duration_limits("greeting")[0]
+            return 0.0
         if video:
             dur = AudioPlayer.get_video_duration(self.app.config.resolve_asset(video))
             return dur or 0.0
@@ -203,20 +226,29 @@ class AdminScenes(QWidget):
 
     def _save(self):
         scene_type = self._active_type
-        is_photo = self._media.currentData() == "photo"
+        is_photo = scene_type != "greeting" or self._media.currentData() == "photo"
         name = self._name.text().strip()
-        image, audio, video = self._image.text(), self._audio.text(), self._video.text()
+        image, audio = self._image.text(), self._audio.text()
+        video = self._video.text() if not is_photo else ""
 
         if not name:
             self.app.show_notification("Bitte einen Namen eingeben.", level="warning")
             return
 
         duration = self._compute_duration(scene_type, is_photo, audio, video)
-        lo, hi = _DURATION_LIMITS[scene_type]
-        if not lo <= duration <= hi:
+        lo, hi = self.app.config.scene_duration_limits(scene_type)
+        if scene_type == "greeting":
+            if not lo <= duration <= hi:
+                self.app.show_notification(
+                    f"Mediendauer {duration:.1f}s liegt außerhalb des erlaubten "
+                    f"Bereichs ({lo:g}–{hi:g}s) für Begrüßungsszenen.",
+                    duration=8.0, level="error")
+                return
+        elif duration > hi:
             self.app.show_notification(
-                f"Dauer {duration:.1f}s liegt außerhalb des erlaubten Bereichs "
-                f"({lo}–{hi}s) für diesen Szenentyp.",
+                f"Audio ({duration:.1f}s) ist länger als die konfigurierte "
+                f"Szenendauer ({hi:g}s). Kürzere Datei wählen oder Dauer unter "
+                f"Einstellungen → Zeiten erhöhen.",
                 duration=8.0, level="error")
             return
 

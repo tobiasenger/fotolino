@@ -19,6 +19,8 @@ import random
 import uuid
 from pathlib import Path
 
+from .constants import SCENE_DURATION_DEFAULTS, SCENE_DURATION_RANGES
+
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent.parent
@@ -57,6 +59,7 @@ def _default_settings() -> dict:
             "post_photo_pause": 2.0,
             "flash_duration": 0.15,
         },
+        "scene_durations": dict(SCENE_DURATION_DEFAULTS),
         "demo_mode": False,
         "progress_bar_enabled": True,
     }
@@ -234,6 +237,52 @@ class ConfigManager:
         if sum(weights) == 0:
             return paths[0]
         return random.choices(paths, weights=weights, k=1)[0]
+
+    # ------------------------------------------------------------------
+    # Scene durations (admin-configurable, see constants.SCENE_DURATION_RANGES)
+    # ------------------------------------------------------------------
+
+    def scene_durations(self) -> dict:
+        """Configured scene durations, clamped to the allowed value ranges."""
+        raw = self.settings.get("scene_durations", {})
+        out = {}
+        for key, (lo, hi) in SCENE_DURATION_RANGES.items():
+            try:
+                value = float(raw.get(key, SCENE_DURATION_DEFAULTS[key]))
+            except (TypeError, ValueError):
+                value = float(SCENE_DURATION_DEFAULTS[key])
+            out[key] = min(float(hi), max(float(lo), value))
+        return out
+
+    def scene_duration_limits(self, scene_type: str) -> tuple[float, float]:
+        """Allowed media duration (lo, hi) for a scene type.
+
+        Greeting media must fill at least the configured minimum; collage and
+        print audio may be any length up to the fixed screen duration.
+        """
+        d = self.scene_durations()
+        if scene_type == "greeting":
+            return d["greeting_min"], d["greeting_max"]
+        return 0.0, d[scene_type]
+
+    def scenes_violating_durations(self, durations: dict) -> list[str]:
+        """Names of scenes that do not fit the given duration settings.
+
+        Collage/print video scenes are always violations (no longer supported).
+        """
+        bad = []
+        for s in self.scenes["scenes"]:
+            stype = s.get("type")
+            dur = float(s.get("duration", 0))
+            if stype == "greeting":
+                ok = durations["greeting_min"] <= dur <= durations["greeting_max"]
+            elif stype in ("collage", "print"):
+                ok = s.get("media_type", "photo") == "photo" and dur <= durations[stype]
+            else:
+                ok = True
+            if not ok:
+                bad.append(s.get("name") or s.get("id", "?"))
+        return bad
 
     # ------------------------------------------------------------------
     # Settings helpers

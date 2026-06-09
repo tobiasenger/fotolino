@@ -1,7 +1,10 @@
 """
 Print screen – shows the collage with a loading bar for the print duration.
-Sends the collage to the printer in a background thread and returns to the
-start screen when the duration has elapsed.
+The screen runs for the fixed duration configured in the admin settings
+("Zeiten" tab); the scene audio starts with the screen and plays once to
+the end, followed by silence. Sends the collage to the printer in a
+background thread and returns to the start screen when the duration has
+elapsed.
 """
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtWidgets import QProgressBar
 
-from ..constants import FONT_SMALL, SCENE_PRINT_DURATION
+from ..constants import FONT_SMALL, SCENE_DURATION_DEFAULTS
 from . import theme
 from .base_screen import BaseScreen
 from .widgets import draw_shadow_text
@@ -28,7 +31,7 @@ class PrintScreen(BaseScreen):
     def __init__(self, app):
         super().__init__(app)
         self._scene: dict | None = None
-        self._duration = float(SCENE_PRINT_DURATION)
+        self._duration = float(SCENE_DURATION_DEFAULTS["print"])
         self._collage_pixmap: QPixmap | None = None
         self._print_sent = False
         self._start_time = 0.0
@@ -51,11 +54,10 @@ class PrintScreen(BaseScreen):
 
         scene_id = ctx.print_scene_id()
         self._scene = cfg.get_scene_by_id(scene_id) if scene_id else None
-        self._duration = float(self._scene.get("duration", SCENE_PRINT_DURATION)) \
-            if self._scene else float(SCENE_PRINT_DURATION)
+        self._duration = cfg.scene_durations()["print"]
 
         self._load_collage()
-        if self._scene and self._scene.get("media_type") == "photo":
+        if self._scene:
             self._set_background(self._load_pixmap(self._scene.get("image", "")))
         else:
             self._set_background(None)

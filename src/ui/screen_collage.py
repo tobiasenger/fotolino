@@ -2,9 +2,12 @@
 Collage screen – cycles through the captured photos while the collage is
 assembled in a background thread, then hands off to the print screen.
 
-Timing: each photo is shown for (scene_duration / n_photos) seconds. If the
-worker is still busy when the slideshow ends, the slideshow continues until
-the collage is ready. The finished collage is shown on the print screen.
+Timing: the screen runs for the fixed duration configured in the admin
+settings ("Zeiten" tab); each photo is shown for (duration / n_photos)
+seconds. The scene audio starts with the screen and plays once to the end –
+afterwards there is silence for the rest of the duration. If the worker is
+still busy when the slideshow ends, the slideshow continues until the
+collage is ready. The finished collage is shown on the print screen.
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPixmap
 from PyQt6.QtWidgets import QProgressBar
 
-from ..constants import FONT_MEDIUM, SCENE_COLLAGE_DURATION
+from ..constants import FONT_MEDIUM, SCENE_DURATION_DEFAULTS
 from . import theme
 from .base_screen import BaseScreen
 from .widgets import draw_shadow_text
@@ -33,7 +36,7 @@ class CollageScreen(BaseScreen):
     def __init__(self, app):
         super().__init__(app)
         self._scene: dict | None = None
-        self._duration = float(SCENE_COLLAGE_DURATION)
+        self._duration = float(SCENE_DURATION_DEFAULTS["collage"])
 
         # Slideshow state
         self._slide_pixmaps: list[QPixmap] = []
@@ -70,11 +73,10 @@ class CollageScreen(BaseScreen):
 
         scene_id = ctx.collage_scene_id()
         self._scene = cfg.get_scene_by_id(scene_id) if scene_id else None
-        self._duration = float(self._scene.get("duration", SCENE_COLLAGE_DURATION)) \
-            if self._scene else float(SCENE_COLLAGE_DURATION)
+        self._duration = cfg.scene_durations()["collage"]
 
         self._build_slideshow()
-        if self._scene and self._scene.get("media_type") == "photo":
+        if self._scene:
             self._set_background(self._load_pixmap(self._scene.get("image", "")))
         else:
             self._set_background(None)

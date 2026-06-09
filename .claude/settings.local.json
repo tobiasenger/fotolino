@@ -4,7 +4,9 @@
       "Bash(ssh -o ConnectTimeout=8 admin@192.168.178.69 \"echo connected\")",
       "Bash(python3 -m compileall -q src)",
       "Bash(bash -n deploy/deploy.sh)",
-      "Bash(python3 -c \"import json; [json.load\\(open\\(f'config/{n}'\\)\\) for n in \\('settings.json','scenes.json','paths.json'\\)]; print\\('CONFIG JSON OK'\\)\")"
+      "Bash(python3 -c \"import json; [json.load\\(open\\(f'config/{n}'\\)\\) for n in \\('settings.json','scenes.json','paths.json'\\)]; print\\('CONFIG JSON OK'\\)\")",
+      "Bash(python3 -m py_compile src/constants.py src/config_manager.py src/ui/screen_intro.py src/ui/screen_collage.py src/ui/screen_print.py src/ui/admin/admin_scenes.py src/ui/admin/admin_settings.py)",
+      "Bash(python3 -c \"import PyQt6; print\\('pyqt ok'\\)\")"
     ]
   }
 }

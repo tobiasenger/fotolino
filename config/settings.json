@@ -37,5 +37,11 @@
     "flash_duration": 0.15
   },
   "demo_mode": false,
-  "progress_bar_enabled": true
+  "progress_bar_enabled": true,
+  "scene_durations": {
+    "greeting_min": 5,
+    "greeting_max": 30,
+    "collage": 15,
+    "print": 40
+  }
 }

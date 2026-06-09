@@ -34,11 +34,21 @@ COLLAGE_LAYOUTS = {
 # Base background color used when a screen has no background image
 COLOR_BG = (10, 10, 20)
 
-# Scene duration limits (seconds)
-SCENE_GREETING_MIN = 5
-SCENE_GREETING_MAX = 20
-SCENE_COLLAGE_DURATION = 10
-SCENE_PRINT_DURATION = 40
+# Scene durations are configured in the admin menu (settings.json key
+# "scene_durations"). These are the allowed value ranges per setting and
+# the factory defaults.
+SCENE_DURATION_RANGES = {
+    "greeting_min": (5, 10),    # minimum greeting duration
+    "greeting_max": (30, 60),   # maximum greeting duration
+    "collage": (10, 25),        # fixed collage screen duration
+    "print": (30, 60),          # fixed print screen duration
+}
+SCENE_DURATION_DEFAULTS = {
+    "greeting_min": 5,
+    "greeting_max": 30,
+    "collage": 15,
+    "print": 40,
+}
 
 # Typography
 FONT_FAMILY = "DejaVu Sans"

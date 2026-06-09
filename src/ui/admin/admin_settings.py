@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 )
 from PIL import Image
 
-from ...constants import COLLAGE_H, COLLAGE_W
+from ...constants import COLLAGE_H, COLLAGE_W, SCENE_DURATION_RANGES
 from .. import theme
 from ..widgets import FileSelectRow
 
@@ -29,7 +29,14 @@ _BG_EXTS = _IMAGE_EXTS | _VIDEO_EXTS
 _PNG_EXTS = {".png"}
 _WAV_EXTS = {".wav"}
 
-_TABS = ["Startscreen", "Overlays", "Aufnahme", "Darstellung", "Gerät", "Sicherung"]
+_TABS = ["Startscreen", "Overlays", "Aufnahme", "Zeiten", "Darstellung", "Gerät", "Sicherung"]
+
+_DURATION_FIELDS = [
+    ("greeting_min", "Begrüßung minimal"),
+    ("greeting_max", "Begrüßung maximal"),
+    ("collage", "Collage-Dauer"),
+    ("print", "Druck-Dauer"),
+]
 
 
 class AdminSettings(QWidget):
@@ -145,6 +152,24 @@ class AdminSettings(QWidget):
         self._combo("flash_enabled", [("Ja", True), ("Nein", False)],
                     cfg.get("flash_enabled", True), f, "Blitz-LED aktiv:")
 
+        # --- Zeiten (scene durations) ---
+        f = self._scroll_form()
+        f.addRow(QLabel("Szenen-Dauern in Sekunden:"))
+        durations = self.app.config.scene_durations()
+        for key, label in _DURATION_FIELDS:
+            lo, hi = SCENE_DURATION_RANGES[key]
+            self._entry(f"dur_{key}", f"{durations[key]:g}", f,
+                        f"{label} ({lo}–{hi} s):")
+        hint = QLabel(
+            "Begrüßung: Die Mediendauer (Audio/Video) der Szene muss zwischen "
+            "Minimal- und Maximalwert liegen.\n"
+            "Collage/Druck: Die Szene dauert exakt die eingestellte Zeit; das "
+            "Audio spielt einmal bis zum Ende und darf höchstens so lang sein.\n"
+            "Änderungen werden nur übernommen, wenn alle vorhandenen Szenen in "
+            "die neuen Grenzen passen.")
+        hint.setWordWrap(True)
+        f.addRow(hint)
+
         # --- Darstellung ---
         f = self._scroll_form()
         self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"), f,
@@ -249,6 +274,8 @@ class AdminSettings(QWidget):
         timing["flash_duration"] = self._get("t_flash", float) or 0.15
         cfg["flash_enabled"] = bool(self._get("flash_enabled"))
 
+        duration_error = self._apply_scene_durations(cfg)
+
         cfg["loading_bar_color"] = self._get("loading_bar_color") or "#FF6600"
         cfg["progress_bar_enabled"] = bool(self._get("progress_bar_enabled"))
         sw = self._get("screen_width", int)
@@ -269,7 +296,34 @@ class AdminSettings(QWidget):
         cfg["demo_mode"] = bool(self._get("demo_mode"))
 
         self.app.config.save_settings()
-        self.app.show_notification("Einstellungen gespeichert.", duration=3.0, level="info")
+        if duration_error:
+            self.app.show_notification(
+                f"Einstellungen gespeichert, aber: {duration_error}",
+                duration=12.0, level="warning")
+        else:
+            self.app.show_notification("Einstellungen gespeichert.", duration=3.0, level="info")
+
+    def _apply_scene_durations(self, cfg: dict) -> str | None:
+        """Validate and apply the "Zeiten" tab. Returns an error text (and
+        leaves the stored durations untouched) if the input is out of range
+        or existing scenes would no longer fit the new limits."""
+        old = self.app.config.scene_durations()
+        new = {}
+        for key, label in _DURATION_FIELDS:
+            lo, hi = SCENE_DURATION_RANGES[key]
+            value = self._get(f"dur_{key}", float)
+            if value is None or not lo <= value <= hi:
+                return f"{label}: Wert muss zwischen {lo} und {hi} Sekunden liegen."
+            new[key] = value
+        if new == old:
+            return None
+        bad = self.app.config.scenes_violating_durations(new)
+        if bad:
+            return ("Zeit-Änderung nicht übernommen. Folgende Szenen passen "
+                    "nicht in die neuen Grenzen und müssen zuerst gelöscht "
+                    "werden: " + ", ".join(bad))
+        cfg["scene_durations"] = new
+        return None
 
     def _validate_cover_size(self, rel: str, count: int):
         if not rel:
@@ -333,9 +387,20 @@ class AdminSettings(QWidget):
             if "paths" in data:
                 self.app.config.paths = data["paths"]
                 self.app.config.save_paths()
+            self.app.config.reload()   # fill in missing defaults (older exports)
             self.refresh()
-            self.app.show_notification(
-                "Konfiguration importiert. Bitte App neu starten.",
-                duration=8.0, level="info")
+            bad = self.app.config.scenes_violating_durations(
+                self.app.config.scene_durations())
+            if bad:
+                self.app.show_notification(
+                    "Konfiguration importiert. Achtung: Folgende Szenen passen "
+                    "nicht in die konfigurierten Zeiten und müssen gelöscht oder "
+                    "angepasst werden: " + ", ".join(bad)
+                    + ". Bitte App neu starten.",
+                    duration=15.0, level="warning")
+            else:
+                self.app.show_notification(
+                    "Konfiguration importiert. Bitte App neu starten.",
+                    duration=8.0, level="info")
         except (OSError, json.JSONDecodeError) as e:
             self.app.show_notification(f"Import fehlgeschlagen: {e}", duration=6.0, level="error")

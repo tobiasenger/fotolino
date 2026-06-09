@@ -1,13 +1,13 @@
 """
 Intro / greeting screen – plays the greeting scene (image+audio or video).
-Auto-advances after the scene duration (capped at SCENE_GREETING_MAX).
+Auto-advances after the scene duration (clamped to the configured
+greeting min/max from the admin settings).
 """
 from __future__ import annotations
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QPainter
 
-from ..constants import SCENE_GREETING_MAX
 from .base_screen import BaseScreen
 from .video_widget import VlcVideoFrame
 
@@ -33,7 +33,8 @@ class IntroScreen(BaseScreen):
         self._scene = self.app.config.get_scene_by_id(scene_id) if scene_id else None
 
         if self._scene:
-            duration = min(float(self._scene.get("duration", 5.0)), SCENE_GREETING_MAX)
+            lo, hi = self.app.config.scene_duration_limits("greeting")
+            duration = max(lo, min(float(self._scene.get("duration", lo)), hi))
             self._setup_media()
         else:
             duration = NO_SCENE_PAUSE_S
