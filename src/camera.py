@@ -3,51 +3,54 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-try:
-    from picamera2 import Picamera2
-    _PICAM_AVAILABLE = True
-except ImportError:
-    _PICAM_AVAILABLE = False
-    logger.info("picamera2 not available – using mock camera")
+# picamera2 is imported lazily inside __init__ so it only loads AFTER
+# QApplication is constructed.  picamera2's package __init__ transitively
+# imports picamera2.previews.gl (OpenGL preview), which tries to create a
+# QOpenGLWidget before QApplication exists and causes a Qt abort.
 
 
 class CameraController:
     """Wraps picamera2 with a graceful mock fallback for development.
 
-    Two configurations are prepared at init time:
-      _preview_config – used during live preview (RGB888, screen resolution, ~30fps)
-      _still_config   – switched to briefly at shutter press (full sensor resolution)
-
-    During capture, switch_mode_and_capture_array() handles the config swap and
-    automatically returns to the preview configuration afterwards.
+    Preview configuration uses the screen resolution; still capture switches
+    temporarily to the full sensor resolution for maximum photo quality.
     """
 
     def __init__(self, width: int = 1920, height: int = 1080):
         self._w = width
         self._h = height
-        self._cam: "Picamera2 | None" = None
+        self._cam = None
         self._streaming = False
+        self._preview_config = None
+        self._still_config = None
 
-        if _PICAM_AVAILABLE:
+        try:
+            from picamera2 import Picamera2  # deferred – see module docstring
+            cam = Picamera2()
+
+            preview_cfg = cam.create_preview_configuration(
+                main={"size": (width, height), "format": "RGB888"},
+            )
             try:
-                self._cam = Picamera2()
+                still_cfg = cam.create_still_configuration(
+                    main={"size": cam.sensor_resolution},
+                )
+            except Exception:
+                still_cfg = preview_cfg   # fall back to preview quality
 
-                # Preview: screen resolution, 30 fps, hardware-decoded by ISP
-                self._preview_config = self._cam.create_preview_configuration(
-                    main={"size": (width, height), "format": "RGB888"},
-                )
-                # Still: full sensor resolution, auto-exposure settled before capture
-                self._still_config = self._cam.create_still_configuration(
-                    main={"size": self._cam.sensor_resolution},
-                )
-                self._cam.configure(self._preview_config)
-                logger.info(
-                    "Camera configured: preview %dx%d, still %s",
-                    width, height, self._cam.sensor_resolution,
-                )
-            except Exception as e:
-                logger.warning("Camera init failed (%s) – using mock", e)
-                self._cam = None
+            cam.configure(preview_cfg)
+            self._cam = cam
+            self._preview_config = preview_cfg
+            self._still_config = still_cfg
+            logger.info(
+                "Camera configured: preview %dx%d, still %s",
+                width, height,
+                getattr(cam, "sensor_resolution", "unknown"),
+            )
+        except ImportError:
+            logger.info("picamera2 not installed – using mock camera")
+        except Exception as e:
+            logger.warning("Camera init failed (%s) – using mock camera", e)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -73,7 +76,7 @@ class CameraController:
     # ------------------------------------------------------------------
 
     def get_frame_rgb(self) -> np.ndarray:
-        """Return current preview frame as (H, W, 3) RGB uint8 array."""
+        """Current preview frame as (H, W, 3) RGB uint8 array."""
         if self._cam and self._streaming:
             try:
                 return self._cam.capture_array("main")
@@ -82,19 +85,18 @@ class CameraController:
         return self._mock_frame()
 
     def capture_photo(self) -> np.ndarray:
-        """Capture a high-quality still using the full sensor resolution.
+        """Capture a still at full sensor resolution.
 
-        The camera briefly switches to the still configuration, captures one
-        frame, then restores the preview configuration automatically.
+        Uses switch_mode_and_capture_array so the camera briefly switches to
+        the still configuration and then automatically returns to preview mode.
+        Falls back to a preview frame if this fails.
         """
         if self._cam and self._streaming:
             try:
                 arr = self._cam.switch_mode_and_capture_array(
                     self._still_config, "main"
                 )
-                logger.info(
-                    "Still captured at %dx%d", arr.shape[1], arr.shape[0]
-                )
+                logger.info("Still captured at %dx%d", arr.shape[1], arr.shape[0])
                 return arr
             except Exception as e:
                 logger.warning("Still capture failed (%s) – using preview frame", e)
@@ -105,7 +107,7 @@ class CameraController:
         return self._mock_frame()
 
     def get_qpixmap(self, mirror: bool = True):
-        """Return the current preview frame as a QPixmap (for polling fallback)."""
+        """Current frame as QPixmap (polling fallback when QGlPicamera2 unavailable)."""
         from PyQt6.QtGui import QImage, QPixmap
         frame = self.get_frame_rgb()
         if mirror:
@@ -116,7 +118,7 @@ class CameraController:
         return QPixmap.fromImage(qimg.copy())
 
     # ------------------------------------------------------------------
-    # Status
+    # Status / properties
     # ------------------------------------------------------------------
 
     def is_connected(self) -> bool:
