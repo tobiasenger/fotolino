@@ -31,6 +31,13 @@ COLLAGE_LAYOUTS = {
     ],
 }
 
+# Foreground media panel (slideshow on the collage screen, finished collage
+# on the print screen): x, y, w, h in 1920x1080 design coordinates.
+MEDIA_PANEL_RECT = (465, 160, 990, 660)
+
+# Progress bar: full screen width, flush with the bottom edge (design height).
+PROGRESS_BAR_H = 100
+
 # Base background color used when a screen has no background image
 COLOR_BG = (10, 10, 20)
 

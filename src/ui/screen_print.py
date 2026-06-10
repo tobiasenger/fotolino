@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtWidgets import QProgressBar
 
-from ..constants import FONT_SMALL, SCENE_DURATION_DEFAULTS
+from ..constants import FONT_SMALL, MEDIA_PANEL_RECT, SCENE_DURATION_DEFAULTS
 from . import theme
 from .base_screen import BaseScreen
 from .widgets import draw_shadow_text
@@ -94,25 +94,20 @@ class PrintScreen(BaseScreen):
         super().resizeEvent(event)
 
     def _position_progress(self):
-        w, h = self.width(), self.height()
-        bar_w = int(w * 0.66)
-        self._progress.setGeometry((w - bar_w) // 2, h - 110, bar_w, 28)
+        self._position_progress_bar(self._progress)
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        w, h = self.width(), self.height()
+        w = self.width()
 
         self._paint_background(painter)
 
         if self._collage_pixmap:
-            scaled = self._collage_pixmap.scaled(
-                int(w * 0.80), int(h * 0.70),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap((w - scaled.width()) // 2,
-                               (h - scaled.height()) // 2 - 40, scaled)
+            self._draw_cover_in_rect(painter, self._collage_pixmap,
+                                     self._design_rect(*MEDIA_PANEL_RECT))
 
-        draw_shadow_text(painter, 0, h - 68, w, 40, STATUS_TEXT,
+        # Keep the status text above the full-width bar at the bottom edge.
+        draw_shadow_text(painter, 0, self._progress.y() - 56, w, 40, STATUS_TEXT,
                          FONT_SMALL, (230, 230, 230),
                          align=Qt.AlignmentFlag.AlignHCenter)
         painter.end()

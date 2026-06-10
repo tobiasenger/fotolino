@@ -16,10 +16,10 @@ import threading
 import time
 
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPixmap
+from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtWidgets import QProgressBar
 
-from ..constants import FONT_MEDIUM, SCENE_DURATION_DEFAULTS
+from ..constants import FONT_MEDIUM, MEDIA_PANEL_RECT, SCENE_DURATION_DEFAULTS
 from . import theme
 from .base_screen import BaseScreen
 from .widgets import draw_shadow_text
@@ -129,21 +129,18 @@ class CollageScreen(BaseScreen):
         super().resizeEvent(event)
 
     def _position_progress(self):
-        w, h = self.width(), self.height()
-        bar_w = int(w * 0.6)
-        self._progress.setGeometry((w - bar_w) // 2, h - 70, bar_w, 28)
+        self._position_progress_bar(self._progress)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         w, h = self.width(), self.height()
 
+        self._paint_background(painter)
         if self._slide_pixmaps:
-            self._draw_cover(painter, self._slide_pixmaps[self._slide_idx])
-            # Subtle dim so the photo isn't too raw
-            painter.fillRect(self.rect(), QColor(0, 0, 0, 60))
+            self._draw_cover_in_rect(painter, self._slide_pixmaps[self._slide_idx],
+                                     self._design_rect(*MEDIA_PANEL_RECT))
         else:
             # No photos – edge case
-            self._paint_background(painter)
             draw_shadow_text(painter, 0, -80, w, h, "Collage wird erstellt…",
                              FONT_MEDIUM, (255, 255, 255),
                              align=Qt.AlignmentFlag.AlignCenter, offset=3)

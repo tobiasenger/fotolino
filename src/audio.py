@@ -2,12 +2,15 @@
 Audio playback for the Fotobox.
 
 Backend strategy (most reliable backend first):
-  * Sound effects (WAV) ........ `aplay` subprocess on Linux/Pi – lowest
-                                  latency, no plugin loading. Failures are
-                                  logged (they used to be silently discarded).
-  * Sound effects (MP3/OGG) .... libVLC one-shot player. Previously non-WAV
-                                  system sounds were refused outright, which
-                                  made the default config silently mute.
+  * Sound effects (all formats)  libVLC one-shot players – one player per
+                                  effect, so sounds may overlap. VLC goes
+                                  through PipeWire/PulseAudio like the scene
+                                  audio, so it cannot hit the "device busy"
+                                  error that direct ALSA access (aplay) gets
+                                  when the sound server holds the device.
+  * SFX fallback (WAV, Linux) .. `aplay` subprocess – only used when libVLC
+                                  is unavailable. Async failures are logged
+                                  and a busy device disables the backend.
   * Background music ........... libVLC media player (WAV / MP3 / OGG).
   * Development fallback ....... QSoundEffect (macOS/Windows, WAV only).
 
@@ -182,7 +185,12 @@ class AudioPlayer:
     # ------------------------------------------------------------------
 
     def play_sfx(self, path):
-        """Play a short sound effect. WAV via aplay, anything else via VLC."""
+        """Play a short sound effect. Effects may overlap (one player each).
+
+        VLC first for every format: it uses the same PipeWire/PulseAudio
+        route as the scene audio, while aplay opens ALSA directly and fails
+        with "Device or resource busy" when the sound server owns the card.
+        """
         p = Path(path)
         if not p.exists():
             logger.warning("SFX file not found: %s", p)
@@ -190,11 +198,11 @@ class AudioPlayer:
         self._reap_finished()
 
         is_wav = p.suffix.lower() == ".wav"
+        if self._play_sfx_vlc(p):
+            return
         if is_wav and sys.platform.startswith("linux") and not self._aplay_missing:
             if self._play_sfx_aplay(p):
                 return
-        if self._play_sfx_vlc(p):
-            return
         if is_wav and self._play_sfx_qt(p):
             return
         logger.warning("No audio backend could play SFX: %s", p)
@@ -257,6 +265,10 @@ class AudioPlayer:
             if rc != 0 and proc.stderr is not None:
                 err = proc.stderr.read().decode(errors="replace").strip()
                 logger.warning("aplay failed (rc=%s): %s", rc, err or "(no output)")
+                if "busy" in err.lower():
+                    # The sound server owns the ALSA device; aplay will keep
+                    # failing, so stop trying and use the other backends.
+                    self._aplay_missing = True
             if proc.stderr is not None:
                 proc.stderr.close()
         self._aplay_procs = still_running

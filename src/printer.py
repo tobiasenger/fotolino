@@ -29,6 +29,7 @@ class Printer:
         self._cfg          = config_manager
         self._printer_name = config_manager.settings.get("printer_name", "SELPHY")
         self._conn         = None
+        self._target       = None  # tatsächlicher CUPS-Warteschlangenname
         self._connect()
 
     def _connect(self):
@@ -36,14 +37,6 @@ class Printer:
             return
         try:
             self._conn = cups.Connection()
-            printers = self._conn.getPrinters()
-            if self._printer_name not in printers:
-                logger.warning(
-                    "Drucker '%s' nicht in CUPS gefunden. "
-                    "Verfügbare Drucker: %s. "
-                    "Bitte Druckername in den Einstellungen prüfen oder Drucker verbinden.",
-                    self._printer_name, list(printers.keys()) or ["(keine)"]
-                )
         except Exception as e:
             logger.warning(
                 "CUPS-Verbindung fehlgeschlagen: %s. "
@@ -52,6 +45,59 @@ class Printer:
                 e
             )
             self._conn = None
+            return
+        self._refresh_target()
+
+    def _refresh_target(self) -> str | None:
+        """Resolve the configured printer name against the queues known to CUPS.
+
+        Re-reads the name from the settings (admin screen can change it at
+        runtime) and tolerates inexact names, e.g. a queue created via the
+        CUPS web UI is usually called 'Canon_SELPHY_CP1500'.
+        """
+        if not self._conn:
+            return None
+        self._printer_name = self._cfg.settings.get("printer_name", "SELPHY")
+        try:
+            printers = self._conn.getPrinters()
+        except Exception as e:
+            logger.warning("CUPS-Abfrage fehlgeschlagen: %s", e)
+            self._conn = None
+            self._target = None
+            return None
+
+        resolved = self._resolve_name(printers)
+        if resolved is None:
+            logger.warning(
+                "Drucker '%s' nicht in CUPS gefunden. Verfügbare Drucker: %s. "
+                "Der Drucker muss einmalig als CUPS-Warteschlange eingerichtet "
+                "werden – Anleitung siehe PRINTER_SETUP.md.",
+                self._printer_name, list(printers.keys()) or ["(keine)"]
+            )
+        elif resolved != self._printer_name:
+            logger.info(
+                "Drucker '%s' nicht exakt gefunden – verwende stattdessen die "
+                "CUPS-Warteschlange '%s'.",
+                self._printer_name, resolved
+            )
+        self._target = resolved
+        return resolved
+
+    def _resolve_name(self, printers: dict) -> str | None:
+        if not printers:
+            return None
+        if self._printer_name in printers:
+            return self._printer_name
+        wanted = self._printer_name.lower()
+        for name in printers:
+            if name.lower() == wanted:
+                return name
+        for name in printers:
+            if wanted in name.lower() or name.lower() in wanted:
+                return name
+        if len(printers) == 1:
+            return next(iter(printers))
+        return None
 
     # ------------------------------------------------------------------
 
@@ -76,37 +122,51 @@ class Printer:
 
         if not self._conn:
             self._connect()  # retry connection
+        # Warteschlange jedes Mal neu auflösen – sie kann seit dem Start
+        # eingerichtet oder umbenannt worden sein.
+        target = self._refresh_target()
 
-        if self._conn:
-            try:
-                job_id = self._conn.printFile(
-                    self._printer_name,
-                    str(path),
-                    "Fotobox",
-                    {"fit-to-page": "true", "media": "w288h432"},
-                )
-                logger.info("Druckauftrag gesendet: Job-ID=%s, Datei=%s", job_id, path)
-                return True
-            except cups.IPPError as e:
-                logger.error(
-                    "Druckfehler (CUPS IPP %s): %s. "
-                    "Bitte prüfen: Drucker eingeschaltet? Kabel/WLAN verbunden? "
-                    "Papier eingelegt? CUPS-Status: `lpstat -p %s`",
-                    e.args[0] if e.args else "?", e, self._printer_name
-                )
-                return False
-            except Exception as e:
-                logger.error(
-                    "Druckfehler (unbekannt): %s. "
-                    "CUPS-Log prüfen: `journalctl -u cups --since '5 minutes ago'`",
-                    e
-                )
-                return False
-        else:
+        if not self._conn:
             logger.error(
                 "Drucker '%s' nicht erreichbar: CUPS-Verbindung nicht verfügbar. "
                 "CUPS-Dienst prüfen: `sudo systemctl restart cups`",
                 self._printer_name
+            )
+            return False
+
+        if target is None:
+            logger.error(
+                "Druck abgebrochen: Keine CUPS-Warteschlange für '%s' eingerichtet. "
+                "Einmalige Einrichtung nötig (siehe PRINTER_SETUP.md), z. B.: "
+                "`sudo lpadmin -p %s -E -v <geraete-uri> -m <treiber>`",
+                self._printer_name, self._printer_name
+            )
+            return False
+
+        try:
+            job_id = self._conn.printFile(
+                target,
+                str(path),
+                "Fotobox",
+                # SELPHY-Papier ist Postkarte 100×148 mm; "fit-to-page" für
+                # klassische PPD-Queues, "print-scaling" für driverless/IPP.
+                {"fit-to-page": "true", "print-scaling": "fill", "media": "Postcard"},
+            )
+            logger.info("Druckauftrag gesendet: Job-ID=%s, Datei=%s", job_id, path)
+            return True
+        except cups.IPPError as e:
+            logger.error(
+                "Druckfehler (CUPS IPP %s): %s. "
+                "Bitte prüfen: Drucker eingeschaltet? Kabel/WLAN verbunden? "
+                "Papier eingelegt? CUPS-Status: `lpstat -p %s`",
+                e.args[0] if e.args else "?", e, target
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                "Druckfehler (unbekannt): %s. "
+                "CUPS-Log prüfen: `journalctl -u cups --since '5 minutes ago'`",
+                e
             )
             return False
 
@@ -132,10 +192,13 @@ class Printer:
         if self.is_demo():
             return True
         if not self._conn:
+            self._connect()
+        target = self._refresh_target()
+        if not self._conn or target is None:
             return False
         try:
             printers = self._conn.getPrinters()
-            info  = printers.get(self._printer_name, {})
+            info  = printers.get(target, {})
             state = info.get("printer-state", 0)
             return state in (3, 4)  # 3 = idle, 4 = processing
         except Exception:

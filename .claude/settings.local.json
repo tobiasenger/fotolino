@@ -6,7 +6,10 @@
       "Bash(bash -n deploy/deploy.sh)",
       "Bash(python3 -c \"import json; [json.load\\(open\\(f'config/{n}'\\)\\) for n in \\('settings.json','scenes.json','paths.json'\\)]; print\\('CONFIG JSON OK'\\)\")",
       "Bash(python3 -m py_compile src/constants.py src/config_manager.py src/ui/screen_intro.py src/ui/screen_collage.py src/ui/screen_print.py src/ui/admin/admin_scenes.py src/ui/admin/admin_settings.py)",
-      "Bash(python3 -c \"import PyQt6; print\\('pyqt ok'\\)\")"
+      "Bash(python3 -c \"import PyQt6; print\\('pyqt ok'\\)\")",
+      "WebSearch",
+      "Bash(python3 -m py_compile src/audio.py)",
+      "Bash(python3 -m py_compile src/constants.py src/ui/base_screen.py src/ui/screen_collage.py src/ui/screen_print.py)"
     ]
   }
 }

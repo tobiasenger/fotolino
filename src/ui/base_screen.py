@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtGui import QColor, QPainter, QPixmap
 from PyQt6.QtWidgets import QWidget
 
-from ..constants import COLOR_BG
+from ..constants import COLOR_BG, PROGRESS_BAR_H, SCREEN_H, SCREEN_W
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,30 @@ class BaseScreen(QWidget):
             Qt.AspectRatioMode.KeepAspectRatioByExpanding, mode)
         painter.drawPixmap((self.width() - scaled.width()) // 2,
                            (self.height() - scaled.height()) // 2, scaled)
+
+    def _design_rect(self, x: int, y: int, w: int, h: int) -> QRect:
+        """Map a rect from 1920x1080 design coordinates to the widget size."""
+        sx = self.width() / SCREEN_W
+        sy = self.height() / SCREEN_H
+        return QRect(round(x * sx), round(y * sy), round(w * sx), round(h * sy))
+
+    def _draw_cover_in_rect(self, painter: QPainter, pixmap: QPixmap, rect: QRect):
+        """Draw a pixmap filling `rect` exactly (cover-scaled, centre-cropped)."""
+        scaled = pixmap.scaled(
+            rect.width(), rect.height(),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation)
+        painter.save()
+        painter.setClipRect(rect)
+        painter.drawPixmap(rect.x() - (scaled.width() - rect.width()) // 2,
+                           rect.y() - (scaled.height() - rect.height()) // 2,
+                           scaled)
+        painter.restore()
+
+    def _position_progress_bar(self, bar):
+        """Place a progress bar full-width, flush with the bottom edge."""
+        bar_h = round(PROGRESS_BAR_H * self.height() / SCREEN_H)
+        bar.setGeometry(0, self.height() - bar_h, self.width(), bar_h)
 
     def resizeEvent(self, event):
         self._bg_scaled = None
