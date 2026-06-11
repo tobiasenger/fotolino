@@ -35,22 +35,27 @@ class CameraController:
                 still_cfg = cam.create_still_configuration(
                     main={"size": cam.sensor_resolution},
                 )
-            except Exception:
+            except Exception as e:
                 still_cfg = preview_cfg   # fall back to preview quality
+                logger.warning(
+                    "Still-Konfiguration fehlgeschlagen (%s) – Fotos werden in "
+                    "Vorschau-Auflösung (%dx%d) aufgenommen.", e, width, height)
 
             cam.configure(preview_cfg)
             self._cam = cam
             self._preview_config = preview_cfg
             self._still_config = still_cfg
             logger.info(
-                "Camera configured: preview %dx%d, still %s",
+                "Kamera bereit: Vorschau %dx%d, Foto-Auflösung %s",
                 width, height,
-                getattr(cam, "sensor_resolution", "unknown"),
+                getattr(cam, "sensor_resolution", "unbekannt"),
             )
         except ImportError:
-            logger.info("picamera2 not installed – using mock camera")
+            logger.info("picamera2 nicht installiert – Mock-Kamera (Testbild) aktiv")
         except Exception as e:
-            logger.warning("Camera init failed (%s) – using mock camera", e)
+            logger.warning(
+                "Kamera-Initialisierung fehlgeschlagen (%s) – Mock-Kamera "
+                "(Testbild) aktiv. Kabel prüfen und mit `rpicam-hello` testen.", e)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -60,13 +65,13 @@ class CameraController:
         if self._cam and not self._streaming:
             self._cam.start()
             self._streaming = True
-            logger.debug("Camera started")
+            logger.debug("Kamera-Vorschau gestartet")
 
     def stop(self):
         if self._cam and self._streaming:
             self._cam.stop()
             self._streaming = False
-            logger.debug("Camera stopped")
+            logger.debug("Kamera-Vorschau gestoppt")
 
     def cleanup(self):
         self.stop()
@@ -81,7 +86,9 @@ class CameraController:
             try:
                 return self._cam.capture_array("main")
             except Exception as e:
-                logger.warning("Frame capture error: %s", e)
+                logger.warning(
+                    "Vorschaubild konnte nicht gelesen werden (%s) – "
+                    "Testbild wird angezeigt.", e)
         return self._mock_frame()
 
     def capture_photo(self) -> np.ndarray:
@@ -96,10 +103,12 @@ class CameraController:
                 arr = self._cam.switch_mode_and_capture_array(
                     self._still_config, "main"
                 )
-                logger.info("Still captured at %dx%d", arr.shape[1], arr.shape[0])
+                logger.info("Foto aufgenommen (%dx%d)", arr.shape[1], arr.shape[0])
                 return arr
             except Exception as e:
-                logger.warning("Still capture failed (%s) – using preview frame", e)
+                logger.warning(
+                    "Foto-Aufnahme in voller Auflösung fehlgeschlagen (%s) – "
+                    "Vorschaubild wird verwendet.", e)
                 try:
                     return self._cam.capture_array("main")
                 except Exception:

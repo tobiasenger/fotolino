@@ -20,7 +20,14 @@
       "Bash(python3 selphy_test.py matrix --help)",
       "Bash(python3 selphy_test.py printers)",
       "Bash(echo \"exit=$?\")",
-      "Bash(python3 -)"
+      "Bash(python3 -)",
+      "Bash(python3 -m py_compile src/ui/theme.py src/ui/widgets.py src/ui/admin/*.py)",
+      "Bash(mkdir -p /tmp/fotobox_admin_shots)",
+      "Bash(QT_QPA_PLATFORM=offscreen python3 -)",
+      "Read(//tmp/**)",
+      "Bash(python3 -m py_compile src/main.py src/app.py src/audio.py src/camera.py src/collage.py src/config_manager.py src/gpio_handler.py src/printer.py src/storage.py src/state.py src/constants.py src/ui/*.py src/ui/admin/*.py)",
+      "Bash(python3 src/main.py --help)",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

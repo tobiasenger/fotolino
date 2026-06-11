@@ -154,6 +154,9 @@ class CollageScreen(BaseScreen):
             pix = QPixmap(str(path))
             if not pix.isNull():
                 self._slide_pixmaps.append(pix)
+            else:
+                logger.warning("Foto %s kann nicht für die Diashow geladen "
+                               "werden – wird übersprungen.", path)
 
     def _create_collage(self):
         """Runs in a background thread; reports back via the worker signal."""
@@ -163,8 +166,8 @@ class CollageScreen(BaseScreen):
             photos = self.app.context.captured_photos
             count = self.app.context.capture_count()
             result = self.app.collage_creator.create(photos, count)
-        except Exception as e:
-            logger.error("Collage creation failed: %s", e)
+        except Exception:
+            logger.exception("Collage-Erstellung fehlgeschlagen")
             error = True
         self._worker.done.emit(result, error)
 
@@ -172,7 +175,9 @@ class CollageScreen(BaseScreen):
         self._collage_result = result
         self._collage_done = True
         if error or result is None:
-            logger.warning("Collage worker reported failure")
+            self.app.show_notification(
+                "Collage konnte nicht erstellt werden – Details in fotobox.log.",
+                duration=8.0, level="error")
 
     def _save_and_transition(self):
         if self._saved:

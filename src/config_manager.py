@@ -100,12 +100,33 @@ class ConfigManager:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
+                    logger.debug("Konfiguration geladen: %s", path)
                     return _merge_defaults(data, default)
-                logger.warning("%s has unexpected structure, using defaults", filename)
+                logger.warning(
+                    "%s hat eine unerwartete Struktur (kein JSON-Objekt) – "
+                    "Standardwerte werden verwendet.", filename)
+                self._backup_broken(path)
             except (json.JSONDecodeError, OSError) as e:
-                logger.warning("Could not load %s (%s), using defaults", filename, e)
+                logger.warning(
+                    "%s konnte nicht geladen werden (%s) – Standardwerte "
+                    "werden verwendet.", filename, e)
+                self._backup_broken(path)
+        else:
+            logger.info("%s nicht vorhanden – wird mit Standardwerten angelegt.",
+                        filename)
         self._save_raw(filename, default)
         return default
+
+    @staticmethod
+    def _backup_broken(path: Path):
+        """Defekte Config-Datei sichern, bevor sie mit Defaults ersetzt wird."""
+        backup = path.with_suffix(path.suffix + ".broken")
+        try:
+            os.replace(path, backup)
+            logger.warning("Defekte Datei gesichert als: %s", backup)
+        except OSError as e:
+            logger.warning("Defekte Datei %s konnte nicht gesichert werden: %s",
+                           path.name, e)
 
     def _save_raw(self, filename: str, data: dict):
         """Atomic write: never leaves a half-written file behind on power loss."""

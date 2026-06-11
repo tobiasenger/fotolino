@@ -4,6 +4,11 @@ Reusable UI building blocks shared by screens and admin views:
   * NotificationLabel   – floating auto-hiding notification (top-left corner)
   * FileSelectRow       – line edit + browse button + extension warning
   * open_file_dialog()  – native file picker returning the chosen path
+  * make_hint() / make_separator() / add_form_section() – admin form helpers
+
+Admin widgets carry a dynamic "kind" property instead of inline styles; the
+swappable admin theme (assets/themes/*.qss) styles them via attribute
+selectors, e.g.  QPushButton[kind="primary"]  (see ADMIN_DESIGN.md).
 """
 from __future__ import annotations
 
@@ -13,14 +18,49 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter
 from PyQt6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
+    QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from ..config_manager import BASE_DIR
 from ..constants import FONT_FAMILY
-from . import theme
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Admin form helpers (styled via the admin theme's "kind" selectors)
+# ---------------------------------------------------------------------------
+
+def set_kind(widget: QWidget, kind: str) -> QWidget:
+    """Tag a widget for the admin stylesheet (QSS attribute selector)."""
+    widget.setProperty("kind", kind)
+    return widget
+
+
+def make_hint(text: str) -> QLabel:
+    """Muted, word-wrapped explanation text."""
+    label = QLabel(text)
+    label.setWordWrap(True)
+    set_kind(label, "hint")
+    return label
+
+
+def make_separator() -> QFrame:
+    """Thin horizontal line separating blocks inside a form."""
+    line = QFrame()
+    line.setFixedHeight(1)
+    set_kind(line, "separator")
+    return line
+
+
+def add_form_section(form: QFormLayout, title: str, first: bool = False):
+    """Add a visually separated section heading spanning both form columns."""
+    if not first:
+        form.addRow(make_separator())
+    label = QLabel(title)
+    set_kind(label, "section")
+    form.addRow(label)
 
 
 def draw_shadow_text(painter: QPainter, x: int, y: int, w: int, h: int,
@@ -83,7 +123,7 @@ class NotificationLabel(QLabel):
         self.raise_()
         self.show()
         self._timer.start(int(duration * 1000))
-        logger.log(self._LOG_LEVELS.get(level, logging.INFO), "[Notification] %s", message)
+        logger.log(self._LOG_LEVELS.get(level, logging.INFO), "[Meldung] %s", message)
 
 
 class FileSelectRow(QWidget):
@@ -104,11 +144,11 @@ class FileSelectRow(QWidget):
 
         self._line = QLineEdit(str(value))
         browse = QPushButton("…")
-        browse.setStyleSheet(theme.BTN_STYLE)
+        set_kind(browse, "tool")
         browse.clicked.connect(self._browse)
 
         self._warn = QLabel("")
-        self._warn.setStyleSheet(theme.WARN_LABEL_STYLE)
+        set_kind(self._warn, "warn")
         self._warn.setWordWrap(True)
 
         row = QHBoxLayout()

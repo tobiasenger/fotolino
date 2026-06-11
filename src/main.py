@@ -5,6 +5,7 @@ Usage:
     python src/main.py            # production (fullscreen kiosk)
     python src/main.py --dev      # dev mode: windowed + keyboard buttons (SPACE/F1)
                                   # + mock camera/GPIO/printer fallbacks
+    python src/main.py --debug    # verbose logging (DEBUG level)
 """
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
@@ -30,10 +31,10 @@ Auf dem Mac (Entwicklung):
 """
 
 
-def _configure_logging():
+def _configure_logging(debug: bool = False):
     from src.config_manager import BASE_DIR
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if debug else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
@@ -41,15 +42,20 @@ def _configure_logging():
                                 backupCount=3, encoding="utf-8"),
         ],
     )
+    logging.getLogger(__name__).info(
+        "Logging aktiv (Level=%s) – Datei: %s",
+        "DEBUG" if debug else "INFO", BASE_DIR / "fotobox.log")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Fotobox")
     parser.add_argument("--dev", action="store_true",
                         help="Development mode: windowed, keyboard buttons, mock camera")
+    parser.add_argument("--debug", action="store_true",
+                        help="Verbose logging (DEBUG level) to console and fotobox.log")
     args = parser.parse_args()
 
-    _configure_logging()
+    _configure_logging(debug=args.debug)
 
     try:
         from PyQt6.QtWidgets import QApplication

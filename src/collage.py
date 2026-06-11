@@ -60,7 +60,8 @@ class CollageCreator:
                 photo = _crop_to_fill(photo, w, h, rot)
                 canvas.paste(photo, (x, y))
             except Exception as e:
-                logger.warning("Could not place photo %s: %s", photo_paths[i], e)
+                logger.warning("Foto %s konnte nicht in die Collage eingefügt "
+                               "werden: %s – Feld bleibt leer.", photo_paths[i], e)
 
         # Overlay PNG cover
         cover_rel = self._cfg.cover_path(capture_count)
@@ -71,18 +72,21 @@ class CollageCreator:
                     overlay = Image.open(cover_path).convert("RGBA")
                     if overlay.size != (COLLAGE_W, COLLAGE_H):
                         logger.warning(
-                            "Cover %s is %dx%d (expected %dx%d) – auto-scaling",
+                            "Cover %s hat %dx%d Pixel (erwartet %dx%d) – wird "
+                            "automatisch skaliert.",
                             cover_path, overlay.size[0], overlay.size[1], COLLAGE_W, COLLAGE_H,
                         )
                         overlay = overlay.resize((COLLAGE_W, COLLAGE_H), Image.Resampling.LANCZOS)
                     canvas_rgba = canvas.convert("RGBA")
                     combined    = Image.alpha_composite(canvas_rgba, overlay)
                     canvas      = combined.convert("RGB")
-                    logger.debug("Overlay applied: %s", cover_path)
+                    logger.debug("Cover-Overlay angewendet: %s", cover_path)
                 except Exception as e:
-                    logger.warning("Could not apply overlay %s: %s", cover_path, e)
+                    logger.warning("Cover-Overlay %s konnte nicht angewendet "
+                                   "werden: %s", cover_path, e)
             else:
-                logger.debug("Overlay file not found: %s", cover_path)
+                logger.warning("Cover-Datei nicht gefunden: %s – Collage ohne "
+                               "Cover. Pfad in den Einstellungen prüfen.", cover_path)
 
         return canvas
 

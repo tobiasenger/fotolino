@@ -1,0 +1,258 @@
+/* ============================================================
+   Fotobox Admin – Theme „Dark" (Standard)
+
+   Austauschbare Design-Datei (wie CSS im Web).
+   Geladen von src/ui/theme.py → admin_stylesheet().
+   Nur das Aussehen – Struktur und Logik liegen im Python-Code.
+
+   Selektor-Vertrag (vollständig dokumentiert in ADMIN_DESIGN.md):
+     #AdminRoot, #AdminSidebar
+     QLabel[kind="appname"|"subtitle"|"title"|"section"|"hint"|"warn"]
+     QPushButton[kind="tab"|"pill"|"primary"|"danger"|"close"|"tool"]
+     QFrame[kind="separator"]
+     QLineEdit, QComboBox, QListWidget, QScrollBar, QToolTip, QMessageBox
+   ============================================================ */
+
+/* ---------- Flächen ---------- */
+
+#AdminRoot {
+    background: #0e1116;
+}
+
+#AdminSidebar {
+    background: #151a22;
+    border-right: 1px solid #232b38;
+}
+
+/* ---------- Typografie ---------- */
+
+QLabel {
+    color: #e8ebf2;
+    font-size: 16px;
+    background: transparent;
+}
+
+QLabel[kind="appname"] {
+    font-size: 24px;
+    font-weight: bold;
+    color: #ffffff;
+}
+
+QLabel[kind="subtitle"] {
+    font-size: 13px;
+    color: #8b94a7;
+}
+
+QLabel[kind="title"] {
+    font-size: 26px;
+    font-weight: bold;
+    color: #ffffff;
+}
+
+QLabel[kind="section"] {
+    font-size: 14px;
+    font-weight: bold;
+    color: #ff7d26;
+    margin-top: 10px;
+}
+
+QLabel[kind="hint"] {
+    font-size: 14px;
+    color: #8b94a7;
+}
+
+QLabel[kind="warn"] {
+    font-size: 14px;
+    color: #ff6b6b;
+}
+
+QFrame[kind="separator"] {
+    background: #232b38;
+    border: none;
+    margin-top: 10px;
+}
+
+/* ---------- Buttons ---------- */
+
+QPushButton {
+    background: #232b38;
+    color: #e8ebf2;
+    border: 1px solid #2e3950;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 16px;
+}
+QPushButton:hover   { background: #2a3445; border-color: #3d4d6b; }
+QPushButton:pressed { background: #1d2430; }
+QPushButton:disabled {
+    color: #5c6577;
+    background: #1a202b;
+    border-color: #232b38;
+}
+
+QPushButton[kind="primary"] {
+    background: #ff6600;
+    color: #ffffff;
+    border: none;
+    font-weight: bold;
+}
+QPushButton[kind="primary"]:hover    { background: #ff7d26; }
+QPushButton[kind="primary"]:pressed  { background: #e05a00; }
+QPushButton[kind="primary"]:disabled { background: #5a3a22; color: #9a8c80; }
+
+QPushButton[kind="danger"] {
+    background: transparent;
+    color: #ff6b6b;
+    border: 1px solid #5a2a31;
+}
+QPushButton[kind="danger"]:hover {
+    background: #3a2128;
+    border-color: #e5484d;
+}
+
+/* Seitenleisten-Tabs (abhakbar, linksbündig) */
+QPushButton[kind="tab"] {
+    background: transparent;
+    color: #aeb6c6;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 17px;
+    text-align: left;
+}
+QPushButton[kind="tab"]:hover {
+    background: #1d2430;
+    color: #ffffff;
+}
+QPushButton[kind="tab"]:checked {
+    background: #ff6600;
+    color: #ffffff;
+    font-weight: bold;
+}
+
+/* Pill-Umschalter (z. B. Szenentyp) */
+QPushButton[kind="pill"] {
+    background: #1a202b;
+    color: #aeb6c6;
+    border: 1px solid #2e3950;
+    border-radius: 17px;
+    padding: 8px 14px;
+}
+QPushButton[kind="pill"]:hover { color: #ffffff; }
+QPushButton[kind="pill"]:checked {
+    background: #ff6600;
+    color: #ffffff;
+    border-color: #ff6600;
+    font-weight: bold;
+}
+
+QPushButton[kind="close"] {
+    background: transparent;
+    color: #aeb6c6;
+    border: 1px solid #2e3950;
+    border-radius: 10px;
+}
+QPushButton[kind="close"]:hover {
+    color: #ff6b6b;
+    border-color: #e5484d;
+    background: #1d2430;
+}
+
+/* Kleine Werkzeug-Buttons (z. B. „…" Datei wählen) */
+QPushButton[kind="tool"] {
+    padding: 8px 12px;
+    border-radius: 8px;
+}
+
+/* ---------- Eingabefelder ---------- */
+
+QLineEdit, QComboBox {
+    background: #161b24;
+    color: #e8ebf2;
+    border: 1px solid #2e3950;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 16px;
+    selection-background-color: #ff6600;
+    selection-color: #ffffff;
+}
+QLineEdit:focus, QComboBox:focus { border-color: #ff6600; }
+QLineEdit:disabled, QComboBox:disabled {
+    color: #5c6577;
+    background: #131822;
+    border-color: #232b38;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 30px;
+}
+QComboBox QAbstractItemView {
+    background: #1a202b;
+    color: #e8ebf2;
+    border: 1px solid #2e3950;
+    border-radius: 8px;
+    selection-background-color: #ff6600;
+    selection-color: #ffffff;
+    outline: none;
+}
+
+/* ---------- Listen ---------- */
+
+QListWidget {
+    background: #131822;
+    border: 1px solid #232b38;
+    border-radius: 12px;
+    padding: 6px;
+    font-size: 16px;
+    outline: none;
+}
+QListWidget::item {
+    color: #e8ebf2;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 2px 0;
+}
+QListWidget::item:hover    { background: #1d2430; }
+QListWidget::item:selected { background: #ff6600; color: #ffffff; }
+
+/* ---------- Scrollbereiche ---------- */
+
+QScrollArea { border: none; background: transparent; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical {
+    background: #2e3950;
+    border-radius: 5px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover { background: #3d4d6b; }
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+    margin: 2px;
+}
+QScrollBar::handle:horizontal {
+    background: #2e3950;
+    border-radius: 5px;
+    min-width: 30px;
+}
+QScrollBar::handle:horizontal:hover { background: #3d4d6b; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+/* ---------- Dialoge & Tooltips ---------- */
+
+QMessageBox { background: #161b24; }
+
+QToolTip {
+    background: #1a202b;
+    color: #e8ebf2;
+    border: 1px solid #2e3950;
+    padding: 6px 8px;
+}

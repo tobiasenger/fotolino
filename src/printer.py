@@ -14,7 +14,8 @@ try:
     _CUPS_AVAILABLE = True
 except ImportError:
     _CUPS_AVAILABLE = False
-    logger.info("pycups not available – printing will use mock output")
+    logger.info("pycups nicht verfügbar – Drucken nur als Demo-Ausgabe möglich. "
+                "Auf dem Pi installieren mit: sudo apt install -y python3-cups")
 
 _DEMO_MSG = (
     "\n"
@@ -227,7 +228,7 @@ class Printer:
             logger.error(
                 "Druckfehler (unbekannt): %s. "
                 "CUPS-Log prüfen: `journalctl -u cups --since '5 minutes ago'`",
-                e
+                e, exc_info=True
             )
             return False
 
@@ -393,6 +394,7 @@ class Printer:
         """Save PIL image to a temp file and print it (CUPS copies it to its spool)."""
         if self.is_demo():
             print(_DEMO_MSG)
+            logger.info("Demo-Modus aktiv: Druckvorgang übersprungen (Bild aus Speicher)")
             return True
         tmp_path = None
         try:
@@ -401,7 +403,7 @@ class Printer:
                 img.save(tmp, "JPEG", quality=95)
             return self.print_collage(tmp_path)
         except Exception as e:
-            logger.error("print_image fehlgeschlagen: %s", e)
+            logger.error("Druck aus Speicherbild fehlgeschlagen: %s", e, exc_info=True)
             return False
         finally:
             if tmp_path is not None:

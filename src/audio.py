@@ -53,7 +53,9 @@ def _get_vlc_instance():
         try:
             _vlc_instance = _vlc.Instance(["--quiet", "--no-video"])
         except Exception as e:
-            logger.error("libVLC instance could not be created: %s", e)
+            logger.error(
+                "libVLC-Instanz konnte nicht erstellt werden (%s) – "
+                "Szenen-Audio und Sound-Effekte über VLC sind deaktiviert.", e)
     return _vlc_instance
 
 
@@ -81,7 +83,8 @@ class AudioPlayer:
         except (ImportError, RuntimeError) as e:
             self._QSoundEffect = None
             self._QUrl = None
-            logger.info("QSoundEffect not available (%s)", e)
+            logger.info("QSoundEffect nicht verfügbar (%s) – Qt-Audio-Fallback "
+                        "entfällt", e)
 
     @property
     def music_available(self) -> bool:
@@ -108,7 +111,8 @@ class AudioPlayer:
                 capture_output=True, text=True, timeout=3, check=False,
             )
             if r.returncode != 0:
-                logger.warning("pactl failed (rc=%s): %s", r.returncode, r.stderr.strip())
+                logger.warning("pactl fehlgeschlagen (rc=%s): %s",
+                               r.returncode, r.stderr.strip())
             for line in r.stdout.splitlines():
                 parts = line.split()
                 if len(parts) >= 2 and any(
@@ -117,20 +121,24 @@ class AudioPlayer:
                         ["pactl", "set-default-sink", parts[1]],
                         capture_output=True, timeout=3, check=False,
                     )
-                    logger.info("Default audio sink set to: %s", parts[1])
+                    logger.info("Audio-Ausgabe auf Kopfhörerbuchse gesetzt: %s",
+                                parts[1])
                     break
             else:
-                logger.info("No headphone sink found in pactl output: %s",
-                            r.stdout.strip() or "(empty)")
+                logger.info(
+                    "Keine Kopfhörer-Audiosenke gefunden – Audio läuft über die "
+                    "Standard-Ausgabe. pactl-Ausgabe: %s",
+                    r.stdout.strip() or "(leer)")
         except Exception as e:
-            logger.warning("pactl not available: %s", e)
+            logger.warning("pactl nicht verfügbar (%s) – Audio-Routing zur "
+                           "Kopfhörerbuchse übersprungen.", e)
         try:
             subprocess.run(
                 ["amixer", "cset", "numid=3", "1"],   # 1 = analog / headphone
                 capture_output=True, timeout=2, check=False,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("amixer-Fallback fehlgeschlagen: %s", e)
 
     # ------------------------------------------------------------------
     # Music (single long track) – VLC
@@ -140,11 +148,13 @@ class AudioPlayer:
         """Play background music. loops=-1 → loop forever."""
         p = Path(path)
         if not p.exists():
-            logger.warning("Audio file not found: %s", p)
+            logger.warning("Audio-Datei nicht gefunden: %s – Musik entfällt. "
+                           "Pfad in den Szenen-Einstellungen prüfen.", p)
             return
         inst = _get_vlc_instance()
         if inst is None:
-            logger.warning("Cannot play music %s – VLC backend unavailable", p)
+            logger.warning("Musik %s kann nicht abgespielt werden – "
+                           "VLC-Backend nicht verfügbar (siehe FIX_AUDIO.md).", p)
             return
         try:
             self.stop_music()
@@ -157,11 +167,11 @@ class AudioPlayer:
             media.release()
             self._music_player.audio_set_volume(100)
             if self._music_player.play() == -1:
-                logger.warning("VLC refused to play music: %s", p)
+                logger.warning("VLC verweigert die Wiedergabe von: %s", p)
             else:
-                logger.info("Music playing: %s", p.name)
+                logger.info("Musik läuft: %s", p.name)
         except Exception as e:
-            logger.warning("Could not play music %s: %s", p, e)
+            logger.warning("Musik %s konnte nicht abgespielt werden: %s", p, e)
 
     def stop_music(self):
         if self._music_player is not None:
@@ -193,7 +203,8 @@ class AudioPlayer:
         """
         p = Path(path)
         if not p.exists():
-            logger.warning("SFX file not found: %s", p)
+            logger.warning("Sound-Datei nicht gefunden: %s – Effekt entfällt. "
+                           "Pfad in den Einstellungen (System-Sounds) prüfen.", p)
             return
         self._reap_finished()
 
@@ -205,7 +216,8 @@ class AudioPlayer:
                 return
         if is_wav and self._play_sfx_qt(p):
             return
-        logger.warning("No audio backend could play SFX: %s", p)
+        logger.warning("Kein Audio-Backend konnte den Sound-Effekt abspielen: %s "
+                       "(siehe FIX_AUDIO.md)", p)
 
     def _play_sfx_aplay(self, p: Path) -> bool:
         try:
@@ -218,7 +230,8 @@ class AudioPlayer:
             return True
         except (FileNotFoundError, OSError) as e:
             self._aplay_missing = True
-            logger.warning("aplay not available (%s) – falling back to VLC", e)
+            logger.warning("aplay nicht verfügbar (%s) – anderes Audio-Backend "
+                           "wird verwendet.", e)
             return False
 
     def _play_sfx_vlc(self, p: Path) -> bool:
@@ -233,12 +246,12 @@ class AudioPlayer:
             player.audio_set_volume(100)
             if player.play() == -1:
                 player.release()
-                logger.warning("VLC refused to play SFX: %s", p)
+                logger.warning("VLC verweigert die Wiedergabe des Sound-Effekts: %s", p)
                 return False
             self._vlc_sfx.append(player)
             return True
         except Exception as e:
-            logger.warning("VLC SFX failed for %s: %s", p, e)
+            logger.warning("VLC-Sound-Effekt fehlgeschlagen für %s: %s", p, e)
             return False
 
     def _play_sfx_qt(self, p: Path) -> bool:
@@ -251,7 +264,7 @@ class AudioPlayer:
             self._qt_effects.append(effect)
             return True
         except Exception as e:
-            logger.warning("QSoundEffect failed: %s", e)
+            logger.warning("QSoundEffect fehlgeschlagen: %s", e)
             return False
 
     def _reap_finished(self):
@@ -264,7 +277,8 @@ class AudioPlayer:
                 continue
             if rc != 0 and proc.stderr is not None:
                 err = proc.stderr.read().decode(errors="replace").strip()
-                logger.warning("aplay failed (rc=%s): %s", rc, err or "(no output)")
+                logger.warning("aplay fehlgeschlagen (rc=%s): %s",
+                               rc, err or "(keine Ausgabe)")
                 if "busy" in err.lower():
                     # The sound server owns the ALSA device; aplay will keep
                     # failing, so stop trying and use the other backends.
@@ -322,7 +336,7 @@ class AudioPlayer:
             if audio is not None and audio.info is not None:
                 return float(audio.info.length)
         except Exception as e:
-            logger.warning("Cannot read duration of %s: %s", path, e)
+            logger.warning("Audio-Dauer von %s nicht lesbar: %s", path, e)
         return None
 
     @staticmethod
@@ -334,7 +348,7 @@ class AudioPlayer:
             if video is not None and video.info is not None and video.info.length:
                 return float(video.info.length)
         except Exception as e:
-            logger.debug("mutagen cannot read %s: %s", path, e)
+            logger.debug("mutagen kann %s nicht lesen: %s", path, e)
 
         inst = _get_vlc_instance()
         if inst is not None:
@@ -351,5 +365,5 @@ class AudioPlayer:
                 media.release()
                 return duration
             except Exception as e:
-                logger.warning("Cannot read video duration of %s (vlc): %s", path, e)
+                logger.warning("Video-Dauer von %s nicht lesbar (VLC): %s", path, e)
         return None

@@ -122,7 +122,8 @@ class PrintScreen(BaseScreen):
         if not pix.isNull():
             self._collage_pixmap = pix
         else:
-            logger.warning("Cannot load collage for display: %s", path)
+            logger.warning("Collage %s kann nicht angezeigt werden (Datei defekt "
+                           "oder nicht lesbar) – Druck wird trotzdem versucht.", path)
 
     def _send_print(self):
         if self._print_sent:
@@ -138,8 +139,8 @@ class PrintScreen(BaseScreen):
             success = self.app.printer.print_collage(Path(path))
             if not success and not self.app.printer.is_demo():
                 self.app.show_notification(
-                    "Druckfehler: Drucker nicht erreichbar. "
-                    "Verbindung, Papier und CUPS-Status prüfen.",
+                    "Druck fehlgeschlagen – Details in fotobox.log. "
+                    "Drucker, Papier und CUPS-Status prüfen.",
                     duration=10.0, level="error",
                 )
 

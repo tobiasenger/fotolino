@@ -56,7 +56,8 @@ class BaseScreen(QWidget):
         if p.exists():
             self.app.audio.play_music(p)
         else:
-            logger.warning("Scene audio file missing: %s", p)
+            logger.warning("Szenen-Audio-Datei fehlt: %s – Szene läuft ohne Ton. "
+                           "Pfad im Admin-Szeneneditor prüfen.", p)
 
     # ------------------------------------------------------------------
     # Background / pixmap helpers
@@ -68,9 +69,16 @@ class BaseScreen(QWidget):
             return None
         p = self.app.config.resolve_asset(path)
         if not p.exists():
+            logger.warning("Bild-Datei fehlt: %s – Standardhintergrund wird "
+                           "verwendet. Pfad im Admin-Bereich prüfen.", p)
             return None
         pix = QPixmap(str(p))
-        return pix if not pix.isNull() else None
+        if pix.isNull():
+            logger.warning("Bild-Datei %s konnte nicht geladen werden (defekt "
+                           "oder kein unterstütztes Format) – "
+                           "Standardhintergrund wird verwendet.", p)
+            return None
+        return pix
 
     def _set_background(self, pixmap: QPixmap | None):
         self._bg_pixmap = pixmap

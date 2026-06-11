@@ -7,7 +7,7 @@ try:
     _GPIO_AVAILABLE = True
 except ImportError:
     _GPIO_AVAILABLE = False
-    logger.info("gpiozero not available – using keyboard fallback (SPACE / F1)")
+    logger.info("gpiozero nicht verfügbar – Tastatur-Fallback aktiv (LEERTASTE / F1)")
 
 
 class _MockLED:
@@ -39,9 +39,12 @@ class GPIOHandler:
                 self._led_ready  = LED(pins["pin_led_ready"])
                 self._start_btn.when_pressed = lambda: self._fire("start_button")
                 self._admin_btn.when_pressed = lambda: self._fire("admin_button")
-                logger.info("GPIO initialised on pins %s", pins)
+                logger.info("GPIO initialisiert: Pins %s", pins)
             except Exception as e:
-                logger.warning("GPIO setup failed (%s) – falling back to keyboard", e)
+                logger.warning(
+                    "GPIO-Initialisierung fehlgeschlagen (%s) – Tastatur-Fallback "
+                    "aktiv (LEERTASTE / F1). Pin-Belegung in settings.json und "
+                    "Verkabelung (WIRING.md) prüfen.", e)
                 self._led_flash = _MockLED()
                 self._led_ready = _MockLED()
         else:
@@ -56,7 +59,7 @@ class GPIOHandler:
         try:
             self._callback(action)
         except Exception:
-            pass
+            logger.exception("GPIO-Callback für '%s' fehlgeschlagen", action)
 
     # ------------------------------------------------------------------
     # LED control

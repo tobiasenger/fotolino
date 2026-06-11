@@ -66,7 +66,7 @@ class FotoboxApp(QMainWindow):
             self.show_notification(
                 "Audio-Backend (python-vlc) fehlt – Szenen-Audio bleibt stumm. "
                 "Siehe FIX_AUDIO.md.", duration=12.0, level="warning")
-        logger.info("Fotobox started (dev=%s)", dev_mode)
+        logger.info("Fotobox gestartet (Dev-Modus=%s)", dev_mode)
 
     # ------------------------------------------------------------------
     # Construction
@@ -117,7 +117,7 @@ class FotoboxApp(QMainWindow):
 
     def switch_screen(self, name: str):
         if name not in self.screens:
-            logger.warning("Unknown screen: %s", name)
+            logger.warning("Unbekannter Screen angefordert: '%s' – Wechsel ignoriert", name)
             return
         old = self.screens.get(self._current_name)
         if old:
@@ -135,7 +135,7 @@ class FotoboxApp(QMainWindow):
                            else Qt.CursorShape.BlankCursor)
 
         self.screens[name].on_enter()
-        logger.info("Screen → %s", name)
+        logger.info("Screen-Wechsel: %s", name)
 
     # ------------------------------------------------------------------
     # Notifications
@@ -212,13 +212,14 @@ class FotoboxApp(QMainWindow):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        logger.info("Shutting down…")
+        logger.info("Fotobox wird beendet…")
         current = self.screens.get(self._current_name)
         if current:
             try:
                 current.on_exit()
             except Exception:
-                pass
+                logger.exception("Fehler beim Verlassen des Screens '%s' "
+                                 "während des Beendens", self._current_name)
         self.gpio.cleanup()
         self.camera.cleanup()
         self.audio.stop_all()

@@ -1,11 +1,14 @@
 """
 Admin Settings tab (PyQt6).
 
-Left sidebar: 6 tabs (Startscreen / Overlays / Aufnahme / Darstellung /
-Gerät / Sicherung). Right: QStackedWidget with a QScrollArea per tab.
+Left sidebar: 6 logically grouped tabs (Darstellung / Aufnahme / Zeiten /
+Collage / Gerät / Sicherung), each tab divided into titled blocks with
+separators. Right: QStackedWidget with a QScrollArea per tab.
 
 The tabs are rebuilt from the saved configuration every time the view is
 shown (refresh()), so an imported configuration is reflected immediately.
+Saving reads fields by key, so moving a field to another tab never affects
+the stored configuration.
 """
 from __future__ import annotations
 
@@ -14,14 +17,13 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit,
     QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 from PIL import Image
 
 from ...constants import COLLAGE_H, COLLAGE_W, SCENE_DURATION_RANGES
-from .. import theme
-from ..widgets import FileSelectRow
+from ..widgets import FileSelectRow, add_form_section, make_hint, set_kind
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 _VIDEO_EXTS = {".mp4", ".avi", ".mov"}
@@ -29,7 +31,7 @@ _BG_EXTS = _IMAGE_EXTS | _VIDEO_EXTS
 _PNG_EXTS = {".png"}
 _WAV_EXTS = {".wav"}
 
-_TABS = ["Startscreen", "Overlays", "Aufnahme", "Zeiten", "Darstellung", "Gerät", "Sicherung"]
+_TABS = ["Darstellung", "Aufnahme", "Zeiten", "Collage", "Gerät", "Sicherung"]
 
 _DURATION_FIELDS = [
     ("greeting_min", "Begrüßung minimal"),
@@ -57,13 +59,13 @@ class AdminSettings(QWidget):
         for i, name in enumerate(_TABS):
             b = QPushButton(name)
             b.setCheckable(True)
-            b.setStyleSheet(theme.TAB_BTN_STYLE)
+            set_kind(b, "tab")
             b.clicked.connect(lambda _, idx=i: self._show_tab(idx))
             side.addWidget(b)
             self._tab_btns[i] = b
         side.addStretch()
         save = QPushButton("Speichern")
-        save.setStyleSheet(theme.BTN_STYLE)
+        set_kind(save, "primary")
         save.clicked.connect(self._save)
         side.addWidget(save)
         side_w = QWidget()
@@ -113,106 +115,139 @@ class AdminSettings(QWidget):
         form.addRow(label, combo)
 
     def _build_tabs(self):
+        """One block per _TABS entry, in the same order. Blocks within a tab
+        are separated via add_form_section()."""
         cfg = self.app.config.settings
 
-        # --- Startscreen ---
+        # --- Darstellung (Startbildschirm, Ladebalken, Bildschirm) ---
         f = self._scroll_form()
+        add_form_section(f, "Startbildschirm", first=True)
         bg = cfg.get("idle_background", {})
         self._combo("bg_type", [("Bild", "image"), ("Video", "video")],
                     bg.get("type", "image"), f, "Hintergrundtyp:")
         self._file_row("bg_file", bg.get("file", ""), f,
                        "Hintergrunddatei:", _BG_EXTS, "Hintergrund")
 
-        # --- Overlays (collage covers) ---
-        f = self._scroll_form()
-        f.addRow(QLabel(f"Collage-Overlays (PNG, {COLLAGE_W}×{COLLAGE_H} px):"))
-        covers = cfg.get("collage_covers", {})
-        for n in range(1, 5):
-            self._file_row(f"cover_{n}", covers.get(str(n), ""), f,
-                           f"{n} Foto(s):", _PNG_EXTS, "Overlay")
+        add_form_section(f, "Ladebalken")
+        self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"), f,
+                    "Farbe (#RRGGBB):")
+        self._combo("progress_bar_enabled", [("Ja", True), ("Nein", False)],
+                    cfg.get("progress_bar_enabled", True), f, "Anzeigen:")
 
-        # --- Aufnahme ---
+        add_form_section(f, "Bildschirm")
+        self._entry("screen_width", cfg.get("screen_width", 1920), f, "Breite (px):")
+        self._entry("screen_height", cfg.get("screen_height", 1080), f, "Höhe (px):")
+
+        # --- Aufnahme (Ablauf, Lächeln, Töne, Blitz) ---
         f = self._scroll_form()
+        timing = cfg.get("capture_timing", {})
+        add_form_section(f, "Ablauf", first=True)
+        self._entry("t_preview", timing.get("initial_preview_seconds", 2.0), f,
+                    "Vorschau-Dauer (s):")
+        self._entry("t_countdown", timing.get("countdown_from", 3), f, "Countdown ab:")
+        self._entry("t_post", timing.get("post_photo_pause", 2.0), f,
+                    "Pause nach Foto (s):")
+
+        add_form_section(f, "Lächeln-Hinweis")
+        self._combo("smile_enabled", [("Ja", True), ("Nein", False)],
+                    timing.get("smile_enabled", True), f, "Aktiv:")
+        self._entry("smile_text", timing.get("smile_text", "Lächeln!"), f, "Text:")
+        self._entry("t_smile", timing.get("smile_duration", 0.8), f, "Dauer (s):")
+
+        add_form_section(f, "Töne")
         sounds = cfg.get("system_sounds", {})
         self._file_row("shutter_click", sounds.get("shutter_click", ""), f,
                        "Auslöser-Ton (WAV empfohlen):", _WAV_EXTS, "Auslöser-Ton")
         self._file_row("countdown_beep", sounds.get("countdown_beep", ""), f,
                        "Countdown-Ton (WAV empfohlen):", _WAV_EXTS, "Countdown-Ton")
-        timing = cfg.get("capture_timing", {})
-        self._entry("t_preview", timing.get("initial_preview_seconds", 2.0), f,
-                    "Vorschau-Dauer (s):")
-        self._entry("t_countdown", timing.get("countdown_from", 3), f, "Countdown ab:")
-        self._combo("smile_enabled", [("Ja", True), ("Nein", False)],
-                    timing.get("smile_enabled", True), f, "Lächeln-Hinweis aktiv:")
-        self._entry("smile_text", timing.get("smile_text", "Lächeln!"), f,
-                    "Lächeln-Text:")
-        self._entry("t_smile", timing.get("smile_duration", 0.8), f, "Lächeln-Dauer (s):")
-        self._entry("t_post", timing.get("post_photo_pause", 2.0), f, "Pause nach Foto (s):")
-        self._entry("t_flash", timing.get("flash_duration", 0.15), f, "Blitz-Dauer (s):")
+
+        add_form_section(f, "Blitz-LED")
         self._combo("flash_enabled", [("Ja", True), ("Nein", False)],
-                    cfg.get("flash_enabled", True), f, "Blitz-LED aktiv:")
+                    cfg.get("flash_enabled", True), f, "Aktiv:")
+        self._entry("t_flash", timing.get("flash_duration", 0.15), f, "Dauer (s):")
 
         # --- Zeiten (scene durations) ---
         f = self._scroll_form()
-        f.addRow(QLabel("Szenen-Dauern in Sekunden:"))
         durations = self.app.config.scene_durations()
-        for key, label in _DURATION_FIELDS:
-            lo, hi = SCENE_DURATION_RANGES[key]
-            self._entry(f"dur_{key}", f"{durations[key]:g}", f,
-                        f"{label} ({lo}–{hi} s):")
-        hint = QLabel(
-            "Begrüßung: Die Mediendauer (Audio/Video) der Szene muss zwischen "
-            "Minimal- und Maximalwert liegen.\n"
+
+        def _dur_row(section: str, keys: list[str], first: bool = False):
+            add_form_section(f, section, first=first)
+            for key, label in _DURATION_FIELDS:
+                if key in keys:
+                    lo, hi = SCENE_DURATION_RANGES[key]
+                    self._entry(f"dur_{key}", f"{durations[key]:g}", f,
+                                f"{label} ({lo}–{hi} s):")
+
+        _dur_row("Begrüßung", ["greeting_min", "greeting_max"], first=True)
+        f.addRow(make_hint(
+            "Die Mediendauer (Audio/Video) der Begrüßungsszene muss zwischen "
+            "Minimal- und Maximalwert liegen."))
+        _dur_row("Collage & Druck", ["collage", "print"])
+        f.addRow(make_hint(
             "Collage/Druck: Die Szene dauert exakt die eingestellte Zeit; das "
             "Audio spielt einmal bis zum Ende und darf höchstens so lang sein.\n"
             "Änderungen werden nur übernommen, wenn alle vorhandenen Szenen in "
-            "die neuen Grenzen passen.")
-        hint.setWordWrap(True)
-        f.addRow(hint)
+            "die neuen Grenzen passen."))
 
-        # --- Darstellung ---
+        # --- Collage (overlays) ---
         f = self._scroll_form()
-        self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"), f,
-                    "Ladebalken-Farbe (#RRGGBB):")
-        self._combo("progress_bar_enabled", [("Ja", True), ("Nein", False)],
-                    cfg.get("progress_bar_enabled", True), f, "Ladebalken anzeigen:")
-        self._entry("screen_width", cfg.get("screen_width", 1920), f, "Bildschirmbreite:")
-        self._entry("screen_height", cfg.get("screen_height", 1080), f, "Bildschirmhöhe:")
+        add_form_section(f, "Collage-Overlays", first=True)
+        f.addRow(make_hint(
+            f"PNG mit Transparenz, exakt {COLLAGE_W}×{COLLAGE_H} px – wird je "
+            "nach Fotoanzahl über die Collage gelegt."))
+        covers = cfg.get("collage_covers", {})
+        for n in range(1, 5):
+            self._file_row(f"cover_{n}", covers.get(str(n), ""), f,
+                           f"{n} Foto(s):", _PNG_EXTS, "Overlay")
 
-        # --- Gerät ---
+        # --- Gerät (Drucker, Speicher, Audio, GPIO, Wartung) ---
         f = self._scroll_form()
-        pins = cfg.get("gpio", {})
-        self._entry("gpio_pin_start_button", pins.get("pin_start_button", 17), f, "GPIO Start-Button:")
-        self._entry("gpio_pin_admin_button", pins.get("pin_admin_button", 27), f, "GPIO Admin-Button:")
-        self._entry("gpio_pin_led_flash", pins.get("pin_led_flash", 22), f, "GPIO Flash-LED:")
-        self._entry("gpio_pin_led_ready", pins.get("pin_led_ready", 23), f, "GPIO Ready-LED:")
-        self._entry("printer_name", cfg.get("printer_name", "SELPHY"), f, "CUPS-Druckername:")
-        self._entry("usb_mount", cfg.get("usb_mount", "/media/usb"), f, "USB-Mount-Pfad:")
-        self._combo("force_headphone_audio", [("Ja", True), ("Nein", False)],
-                    cfg.get("force_headphone_audio", True), f,
-                    "Audio auf Klinke zwingen:")
+        add_form_section(f, "Drucker", first=True)
+        self._entry("printer_name", cfg.get("printer_name", "SELPHY"), f,
+                    "CUPS-Druckername:")
         self._combo("demo_mode", [("Aus", False), ("Ein", True)],
                     cfg.get("demo_mode", False), f, "Demo-Modus (kein Drucker):")
 
-        cam_btn = QPushButton("Kamera testen")
-        cam_btn.setStyleSheet(theme.BTN_STYLE)
-        cam_btn.clicked.connect(lambda: self.app.switch_screen("camera_test"))
-        f.addRow("", cam_btn)
-
+        add_form_section(f, "Speicher")
+        self._entry("usb_mount", cfg.get("usb_mount", "/media/usb"), f,
+                    "USB-Mount-Pfad:")
         usb_btn = QPushButton("USB-Stick vorbereiten")
-        usb_btn.setStyleSheet(theme.BTN_STYLE)
         usb_btn.setToolTip("Erstellt die Ordner 'Fotos' und 'Collagen' auf dem USB-Stick.")
         usb_btn.clicked.connect(self._prepare_usb)
         f.addRow("", usb_btn)
 
+        add_form_section(f, "Audio")
+        self._combo("force_headphone_audio", [("Ja", True), ("Nein", False)],
+                    cfg.get("force_headphone_audio", True), f,
+                    "Audio auf Klinke zwingen:")
+
+        add_form_section(f, "GPIO-Pins")
+        pins = cfg.get("gpio", {})
+        self._entry("gpio_pin_start_button", pins.get("pin_start_button", 17), f,
+                    "Start-Button:")
+        self._entry("gpio_pin_admin_button", pins.get("pin_admin_button", 27), f,
+                    "Admin-Button:")
+        self._entry("gpio_pin_led_flash", pins.get("pin_led_flash", 22), f,
+                    "Flash-LED:")
+        self._entry("gpio_pin_led_ready", pins.get("pin_led_ready", 23), f,
+                    "Ready-LED:")
+        f.addRow(make_hint("Pin-Änderungen werden beim nächsten Start übernommen."))
+
+        add_form_section(f, "Wartung")
+        cam_btn = QPushButton("Kamera testen")
+        cam_btn.clicked.connect(lambda: self.app.switch_screen("camera_test"))
+        f.addRow("", cam_btn)
+
         # --- Sicherung ---
         f = self._scroll_form()
-        f.addRow(QLabel("Konfiguration exportieren/importieren:"))
+        add_form_section(f, "Konfiguration", first=True)
+        f.addRow(make_hint(
+            "Sichert alle Einstellungen, Szenen und Pfade in eine JSON-Datei "
+            "bzw. stellt sie daraus wieder her. Nach einem Import die App neu "
+            "starten."))
         exp = QPushButton("Konfiguration exportieren")
-        exp.setStyleSheet(theme.BTN_STYLE)
         exp.clicked.connect(self._export_config)
         imp = QPushButton("Konfiguration importieren")
-        imp.setStyleSheet(theme.BTN_STYLE)
         imp.clicked.connect(self._import_config)
         f.addRow("", exp)
         f.addRow("", imp)

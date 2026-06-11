@@ -20,8 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ...audio import AudioPlayer
-from .. import theme
-from ..widgets import FileSelectRow
+from ..widgets import FileSelectRow, add_form_section, make_hint, set_kind
 
 _SCENE_TYPES = ["greeting", "collage", "print"]
 _SCENE_LABELS = {"greeting": "Begrüßung", "collage": "Collage", "print": "Druck"}
@@ -38,18 +37,32 @@ class AdminScenes(QWidget):
         self._active_type = _SCENE_TYPES[0]
         self._editing_id: str | None = None
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(16)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(12)
+
+        # ---- Header ----
+        title = QLabel("Szenen")
+        set_kind(title, "title")
+        root.addWidget(title)
+        root.addWidget(make_hint(
+            "Szenen sind die Bausteine eines Durchlaufs: Begrüßung, Collage- "
+            "und Druck-Anzeige. Pfade (nächster Tab) verknüpfen sie zu einem "
+            "Ablauf."))
+
+        content = QHBoxLayout()
+        content.setSpacing(16)
+        root.addLayout(content, 1)
 
         # ---- Left: type tabs + scene list ----
         left = QVBoxLayout()
+        left.setSpacing(10)
         tab_row = QHBoxLayout()
         self._type_btns = {}
         for key in _SCENE_TYPES:
             b = QPushButton(_SCENE_LABELS[key])
             b.setCheckable(True)
-            b.setStyleSheet(theme.PILL_BTN_STYLE)
+            set_kind(b, "pill")
             b.clicked.connect(lambda _, k=key: self._switch_type(k))
             tab_row.addWidget(b)
             self._type_btns[key] = b
@@ -61,27 +74,28 @@ class AdminScenes(QWidget):
 
         btn_row = QHBoxLayout()
         add_btn = QPushButton("+ Neue Szene")
-        add_btn.setStyleSheet(theme.BTN_STYLE)
+        set_kind(add_btn, "primary")
         add_btn.clicked.connect(self._new_scene)
         del_btn = QPushButton("Löschen")
-        del_btn.setStyleSheet(theme.DEL_BTN_STYLE)
+        set_kind(del_btn, "danger")
         del_btn.clicked.connect(self._delete_selected)
-        btn_row.addWidget(add_btn)
+        btn_row.addWidget(add_btn, 1)
         btn_row.addWidget(del_btn)
         left.addLayout(btn_row)
 
         left_w = QWidget()
         left_w.setLayout(left)
         left_w.setFixedWidth(440)
-        root.addWidget(left_w)
+        content.addWidget(left_w)
 
         # ---- Right: editor ----
         self._editor = QScrollArea()
         self._editor.setWidgetResizable(True)
         self._editor_inner = QWidget()
         self._form = QFormLayout(self._editor_inner)
+        self._form.setVerticalSpacing(10)
         self._editor.setWidget(self._editor_inner)
-        root.addWidget(self._editor, 1)
+        content.addWidget(self._editor, 1)
 
         self._build_form()
         self._set_editor_enabled(False)
@@ -89,6 +103,10 @@ class AdminScenes(QWidget):
     # ------------------------------------------------------------------
 
     def _build_form(self):
+        self._editor_status = QLabel()
+        set_kind(self._editor_status, "section")
+        self._form.addRow(self._editor_status)
+
         self._name = QLineEdit()
 
         self._media = QComboBox()
@@ -104,6 +122,8 @@ class AdminScenes(QWidget):
         self._form.addRow("Name:", self._name)
         self._lbl_media = QLabel("Medientyp:")
         self._form.addRow(self._lbl_media, self._media)
+
+        add_form_section(self._form, "Medien")
         self._lbl_image = QLabel("Bilddatei (.jpg/.png):")
         self._form.addRow(self._lbl_image, self._image)
         self._lbl_audio = QLabel("Audiodatei (.wav/.mp3/.ogg):")
@@ -113,10 +133,11 @@ class AdminScenes(QWidget):
 
         self._info = QLabel()
         self._info.setWordWrap(True)
+        set_kind(self._info, "hint")
         self._form.addRow(self._info)
 
-        save = QPushButton("Speichern")
-        save.setStyleSheet(theme.BTN_STYLE)
+        save = QPushButton("Szene speichern")
+        set_kind(save, "primary")
         save.clicked.connect(self._save)
         self._form.addRow("", save)
 
@@ -185,6 +206,8 @@ class AdminScenes(QWidget):
 
     def _new_scene(self):
         self._editing_id = "__new__"
+        self._editor_status.setText(
+            f"Neue Szene ({_SCENE_LABELS[self._active_type]})")
         self._name.setText("")
         self._media.setCurrentIndex(0)
         self._image.setText("")
@@ -195,6 +218,8 @@ class AdminScenes(QWidget):
 
     def _load_into_editor(self, scene: dict):
         self._editing_id = scene["id"]
+        self._editor_status.setText(
+            f"Szene bearbeiten: {scene.get('name', '(kein Name)')}")
         self._name.setText(scene.get("name", ""))
         self._media.setCurrentIndex(0 if scene.get("media_type", "photo") == "photo" else 1)
         self._image.setText(scene.get("image", ""))
@@ -205,6 +230,9 @@ class AdminScenes(QWidget):
 
     def _set_editor_enabled(self, on: bool):
         self._editor_inner.setEnabled(on)
+        if not on:
+            self._editor_status.setText(
+                "Szene links auswählen oder „+ Neue Szene“ erstellen")
 
     # ------------------------------------------------------------------
 

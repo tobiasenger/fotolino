@@ -33,7 +33,8 @@ def _get_video_instance():
         try:
             _vlc_instance = _vlc.Instance(["--quiet"])
         except Exception as e:
-            logger.error("libVLC video instance could not be created: %s", e)
+            logger.error("libVLC-Video-Instanz konnte nicht erstellt werden (%s) "
+                         "– Video-Szenen werden ohne Video abgespielt.", e)
     return _vlc_instance
 
 
@@ -56,7 +57,8 @@ class VlcVideoFrame(QFrame):
         self.stop()
         inst = _get_video_instance()
         if inst is None:
-            logger.warning("Cannot play video %s – VLC backend unavailable", path)
+            logger.warning("Video %s kann nicht abgespielt werden – VLC-Backend "
+                           "nicht verfügbar (siehe FIX_AUDIO.md).", path)
             return False
         try:
             media = inst.media_new(str(path))
@@ -72,7 +74,8 @@ class VlcVideoFrame(QFrame):
             QTimer.singleShot(200, self._attach_and_play)
             return True
         except Exception as e:
-            logger.warning("Video setup failed for %s: %s", path, e)
+            logger.warning("Video-Wiedergabe von %s konnte nicht vorbereitet "
+                           "werden: %s", path, e)
             self.stop()
             return False
 
@@ -90,7 +93,8 @@ class VlcVideoFrame(QFrame):
             if self._player.play() == -1:
                 raise RuntimeError("libVLC refused to start playback")
         except Exception as e:
-            logger.warning("Video playback failed: %s", e)
+            logger.warning("Video-Wiedergabe fehlgeschlagen: %s – Szene fällt "
+                           "auf Bild+Audio zurück.", e)
             self.stop()
             self.playback_failed.emit()
 

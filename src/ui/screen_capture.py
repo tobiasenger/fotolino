@@ -188,7 +188,8 @@ class CaptureScreen(BaseScreen):
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 Image.fromarray(frame, "RGB").save(tmp, "JPEG", quality=95)
                 path = Path(tmp.name)
-            logger.warning("Photo parked in temp file: %s", path)
+            logger.warning("Foto ersatzweise zwischengespeichert: %s – wird beim "
+                           "Entfernen des Temp-Verzeichnisses gelöscht!", path)
 
         self.app.context.captured_photos.append(path)
         self._play_sound("shutter_click")
