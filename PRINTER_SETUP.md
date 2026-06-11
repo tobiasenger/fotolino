@@ -1,15 +1,19 @@
-# Drucker-Einrichtung: Canon SELPHY CP1500
+# Drucker-Einrichtung: Canon SELPHY CP1500 (USB)
 
-Dieses Dokument beschreibt Schritt für Schritt, wie der Canon SELPHY CP1500
-auf dem Raspberry Pi eingerichtet wird, damit die Fotobox drucken kann.
+Schritt-für-Schritt-Anleitung, um den Canon SELPHY CP1500 **per USB** auf
+einem frischen Raspberry Pi OS **Trixie** (Debian 13) einzurichten, damit
+die Fotobox drucken kann.
 
-**Wichtig vorab:** Das Installieren der Pakete allein reicht **nicht**.
-Der Drucker muss zusätzlich einmalig als **CUPS-Warteschlange** angelegt
-werden. Genau das fehlte bei der Fehlermeldung
-`Drucker 'SELPHY' nicht in CUPS gefunden. Verfügbare Drucker: ['(keine)']` –
-CUPS lief zwar, kannte aber noch keinen einzigen Drucker. Der spätere
-Druckfehler `CUPS IPP 1280: No such file or directory` ist nur die
-Folge davon (Druckauftrag an eine nicht existierende Warteschlange).
+**Wichtig vorab:**
+
+1. Canon liefert keinen Linux-Treiber für den CP1500. Der Open-Source-Treiber
+   **Gutenprint** unterstützt den CP1500 erst ab **Version 5.3.5**. Trixie
+   liefert im Debian-Paket nur 5.3.4 – Gutenprint 5.3.5 muss daher einmalig
+   **aus den Quellen** gebaut werden (Abschnitt 3).
+2. Pakete installieren allein reicht nicht: Der Drucker muss zusätzlich
+   einmalig als **CUPS-Warteschlange** angelegt werden (Abschnitt 4). Fehlt
+   sie, meldet die App `Drucker 'SELPHY' nicht in CUPS gefunden. Verfügbare
+   Drucker: ['(keine)']`.
 
 ---
 
@@ -25,11 +29,11 @@ Folge davon (Druckauftrag an eine nicht existierende Warteschlange).
 
 ---
 
-## 2. Benötigte Pakete (Annahme: noch nichts installiert)
+## 2. Basispakete installieren
 
 ```bash
 sudo apt update
-sudo apt install -y cups cups-client cups-bsd printer-driver-gutenprint python3-cups usbutils
+sudo apt install -y cups cups-client cups-bsd python3-cups usbutils
 ```
 
 | Paket | Wozu |
@@ -37,12 +41,8 @@ sudo apt install -y cups cups-client cups-bsd printer-driver-gutenprint python3-
 | `cups` | Der Druckdienst selbst (verwaltet Warteschlangen und Aufträge) |
 | `cups-client` | Kommandozeilen-Werkzeuge wie `lpadmin`, `lpstat`, `lpinfo` |
 | `cups-bsd` | Klassische Befehle wie `lpr` (praktisch zum Testen) |
-| `printer-driver-gutenprint` | Open-Source-Treiber für die Canon-SELPHY-Serie |
-| `python3-cups` | Python-Anbindung (`pycups`) – wird vom Code in `src/printer.py` benutzt |
+| `python3-cups` | Python-Anbindung (`pycups`) – wird von `src/printer.py` benutzt |
 | `usbutils` | `lsusb` zum Prüfen, ob der Drucker am USB erkannt wird |
-
-> Statt `printer-driver-gutenprint` funktioniert auch das Sammelpaket
-> `printer-driver-all` (enthält Gutenprint).
 
 Dann CUPS starten und den Benutzer zur Druckerverwaltung berechtigen:
 
@@ -51,132 +51,228 @@ sudo systemctl enable --now cups
 sudo usermod -aG lpadmin $USER     # danach einmal ab- und wieder anmelden
 ```
 
+> **Hinweis `ipp-usb`:** Falls das Paket `ipp-usb` installiert ist,
+> beansprucht es USB-Drucker für sich und blockiert andere Backends.
+> Sicherheitshalber entfernen: `sudo apt remove ipp-usb`
+
 ---
 
-## 3. Drucker als CUPS-Warteschlange anlegen
+## 3. Gutenprint 5.3.5 aus den Quellen installieren
 
-Canon liefert **keinen Linux-Treiber** für den CP1500. Es gibt zwei Wege:
-
-### Weg A: USB mit Gutenprint (empfohlen, wenn verfügbar)
-
-Der CP1500 wird von Gutenprint erst seit **Version 5.3.5** unterstützt
-(bzw. Snapshots ab Oktober 2022). Prüfen, ob die installierte Version ihn kennt:
+### 3.1 Build-Abhängigkeiten
 
 ```bash
-lpinfo -m | grep -i cp1500
+sudo apt install -y build-essential pkg-config libcups2-dev libcupsimage2-dev libusb-1.0-0-dev
 ```
 
-- **Treffer vorhanden** (z. B. auf Raspberry Pi OS „Trixie"/Debian 13):
-  weiter mit den Schritten unten.
-- **Kein Treffer** (z. B. Raspberry Pi OS „Bookworm" mit Gutenprint
-  5.3.4): Entweder das Betriebssystem aktualisieren, Gutenprint aus den
-  Quellen bauen – oder einfach **Weg B (WLAN)** nutzen.
+**Wichtig:** Ohne `libcups2-dev` und `libcupsimage2-dev` schlägt der
+Build später fehl bzw. baut ohne CUPS-Unterstützung – erkennbar an dieser
+Zeile in der `./configure`-Ausgabe:
 
-Einrichtung:
+```text
+checking for cups-config... no
+```
+
+Erst wenn dort ein Pfad steht (`checking for cups-config... /usr/bin/cups-config`),
+wird der CUPS-Treiber mitgebaut.
+
+### 3.2 Quellcode laden, bauen, installieren
 
 ```bash
-# 1. Drucker einschalten, per USB anschließen, Erkennung prüfen:
-lsusb | grep -i canon
+cd ~
+wget https://downloads.sourceforge.net/project/gimp-print/gutenprint-5.3/5.3.5/gutenprint-5.3.5.tar.xz
+tar xf gutenprint-5.3.5.tar.xz
+cd gutenprint-5.3.5
 
-# 2. Geräte-URI anzeigen lassen (Zeile mit "selphy" bzw. "gutenprint…usb"):
-lpinfo -v
-# Beispielausgabe: direct gutenprint53+usb://canon-selphy-cp1500/...
+./configure --without-doc
+# In der Ausgabe prüfen: "checking for cups-config... /usr/bin/cups-config"
 
-# 3. Exakten Treibernamen ermitteln:
+make -j4          # dauert auf dem Pi 4 eine Weile
+sudo make install
+sudo ldconfig
+sudo systemctl restart cups
+```
+
+Die CUPS-Treiberdateien werden dabei in die echten CUPS-Verzeichnisse
+installiert (`./configure` ermittelt sie über `cups-config`) und
+überschreiben dort die 5.3.4-Dateien des Debian-Pakets.
+
+### 3.3 Installierte Version prüfen
+
+```bash
+gutenprint-config --version
+# Soll: 5.3.5
+```
+
+> **Nicht verwirren lassen:** `dpkg -l | grep gutenprint` zeigt weiterhin
+> die alte Debian-Paketversion (5.3.4) an. Das ist **erwartet** – die
+> manuell aus den Quellen installierte Version wird von `dpkg` nicht
+> verwaltet. Maßgeblich ist die Ausgabe von `gutenprint-config --version`.
+
+Anschließend prüfen, dass CUPS den CP1500-Treiber jetzt kennt:
+
+```bash
 lpinfo -m | grep -i cp1500
-# Beispielausgabe: gutenprint.5.3://canon-cp1500/expert ...
+# Soll u. a. zeigen: gutenprint.5.3://canon-cp1500/expert  Canon SELPHY CP1500 - CUPS+Gutenprint v5.3.5
+```
 
-# 4. Warteschlange "SELPHY" anlegen (URI und Treiber aus Schritt 2+3 einsetzen):
+> Falls vor dem Update bereits Gutenprint-Warteschlangen existierten,
+> deren PPDs aktualisieren: `sudo cups-genppdupdate && sudo systemctl restart cups`
+
+---
+
+## 4. CUPS-Warteschlange anlegen (USB)
+
+### 4.1 Drucker anschließen und Geräte-URI ermitteln
+
+Drucker einschalten, per USB anschließen, dann:
+
+```bash
+# 1. Wird der Drucker am USB erkannt?
+lsusb | grep -i canon
+# Beispiel: Bus 001 Device 005: ID 04a9:32f1 Canon, Inc. SELPHY CP1500
+
+# 2. Geräte-URI anzeigen lassen:
+lpinfo -v
+# Relevante Zeile, Beispiel:
+# direct usb://Canon/SELPHY%20CP1500?serial=CZ23011023417958
+```
+
+> **Achtung:** Das Wort `direct` am Zeilenanfang ist **nicht Teil der URI** –
+> es bezeichnet nur die Backend-Klasse. Die URI beginnt bei `usb://`.
+> Falsch: `-v "direct usb://Canon/..."` · Richtig: `-v "usb://Canon/..."`
+
+### 4.2 Warteschlange anlegen
+
+URI aus Schritt 4.1 einsetzen (die Seriennummer ist bei jedem Gerät anders):
+
+```bash
 sudo lpadmin -p SELPHY -E \
-  -v "gutenprint53+usb://canon-selphy-cp1500/..." \
+  -v "usb://Canon/SELPHY%20CP1500?serial=CZ23011023417958" \
   -m "gutenprint.5.3://canon-cp1500/expert"
 
-# 5. Papiergröße als Standard setzen und Drucker als Standarddrucker markieren:
+# Papiergröße als Standard setzen und als Standarddrucker markieren:
 sudo lpadmin -p SELPHY -o media-default=Postcard
 sudo lpoptions -d SELPHY
 ```
 
-> **Achtung:** Falls das Paket `ipp-usb` installiert ist, beansprucht es
-> das USB-Gerät für sich und blockiert den Gutenprint-USB-Backend.
-> Für Weg A daher entfernen: `sudo apt remove ipp-usb`
+- `-p SELPHY` – Name der Warteschlange (muss zu `printer_name` in der App passen)
+- `-E` – Warteschlange aktivieren und Aufträge annehmen
+- `-v` – die Geräte-URI aus `lpinfo -v` (ohne `direct`!)
+- `-m` – der Gutenprint-5.3.5-Treiber aus `lpinfo -m | grep -i cp1500`
+  (Variante `expert` verwenden – sie stellt die Randlos-Optionen bereit,
+  die die Fotobox setzt)
 
-### Weg B: WLAN, treiberlos über AirPrint/IPP
-
-Der CP1500 unterstützt AirPrint. Das funktioniert ohne speziellen Treiber
-und damit auch auf älteren Systemen (Bookworm):
-
-1. Am Drucker im Menü das WLAN einrichten (gleiches Netz wie der Pi).
-   Vorher möglichst die aktuelle **Drucker-Firmware** installieren –
-   Canon hat IPP-Fehler per Update behoben.
-2. Drucker finden und Warteschlange anlegen:
+### 4.3 Verfügbare Druckoptionen prüfen
 
 ```bash
-# Drucker im Netz suchen (zeigt eine ipp://…-Adresse):
-lpinfo -v | grep -i ipp
-
-# Warteschlange treiberlos anlegen ("everywhere" = AirPrint/IPP):
-sudo lpadmin -p SELPHY -E -v "ipp://<adresse-aus-obiger-ausgabe>" -m everywhere
-sudo lpoptions -d SELPHY
+lpoptions -p SELPHY -l | grep -i pagesize
+# Beispiel: PageSize/Page Size: *Postcard w253h337 w155h244 ...
 ```
 
-### Alternative: CUPS-Webinterface
-
-Statt der Kommandozeile geht auch der Browser:
-
-```bash
-sudo cupsctl --remote-admin    # Fernzugriff erlauben (nur falls vom Mac aus)
-```
-
-Dann `http://fotobox.local:631` öffnen → *Verwaltung* → *Drucker hinzufügen*
-(Login = Pi-Benutzername/-Passwort). Beim Einrichten als Namen **SELPHY**
-eintragen – oder anschließend den vergebenen Namen im Admin-Bereich der
-Fotobox unter „CUPS-Druckername" hinterlegen.
+`Postcard` (100×148 mm) ist das richtige Format für das KP-108IN-Papier
+und genau das, was die Fotobox in `src/printer.py` anfordert.
 
 ---
 
-## 4. Funktion prüfen
+## 5. Funktion prüfen
 
 ```bash
 # Ist die Warteschlange da und bereit? (Soll: "… ist im Leerlauf")
 lpstat -p SELPHY
 
 # Testdruck (Papier + Farbkassette einlegen!):
-lp -d SELPHY /usr/share/cups/data/testprint
+lp -d SELPHY -o PageSize=Postcard -o fit-to-page /usr/share/cups/data/testprint
 ```
+
+> Falls der Testdruck mit „Waiting for printer to become available" hängt:
+> USB-Kabel des Druckers **ab- und wieder anstecken** (siehe Fehlersuche) –
+> das war auch bei der Ersteinrichtung dieses Geräts nötig.
 
 Danach die Fotobox starten – die Warnung
 „Drucker 'SELPHY' nicht in CUPS gefunden" darf nicht mehr erscheinen.
 Die App erkennt eine neu eingerichtete Warteschlange auch **ohne Neustart**,
 da sie vor jedem Druck neu sucht.
 
+### Druckoptionen der Fotobox
+
+`src/printer.py` sendet jeden Auftrag mit diesen Optionen (Werte aus dem
+Gutenprint-Expert-PPD des CP1500):
+
+| Option | Wert | Bedeutung |
+|---|---|---|
+| `PageSize` | `Postcard` | 100×148 mm (KP-108IN-Papier) |
+| `StpBorderless` | `True` | randlos drucken |
+| `StpiShrinkOutput` | `Expand` | Bild auf die volle Seite aufziehen |
+| `StpImageType` | `Photo` | Farbabstimmung für Fotos |
+| `fit-to-page` | `true` | JPEG per CUPS-Filter auf die Seite skalieren |
+
+Die App protokolliert vor jedem Druck Warteschlange, Geräte-URI, Datei und
+Optionen und prüft nach dem Absenden kurz den Job-Status – verworfene
+Aufträge werden als Fehler gemeldet, hängende Aufträge mit der
+CUPS-Druckermeldung ins Log geschrieben.
+
 ---
 
-## 5. Fehlersuche
+## 6. Fehlersuche
+
+### Auftrag hängt bei „Waiting for printer to become available"
+
+Das ist die häufigste Störung: CUPS hat den Auftrag angenommen, aber das
+USB-Backend kann den Drucker nicht öffnen. Der Reihe nach prüfen:
+
+```bash
+# 1. Gesamtstatus: Warteschlangen, Aufträge, Statusmeldungen
+lpstat -t
+
+# 2. Wird der Drucker am USB überhaupt noch gesehen?
+lsusb | grep -i canon
+
+# 3. USB-Kabel ab- und wieder anstecken bzw. Drucker aus- und einschalten.
+#    Der SELPHY meldet sich nach Standby/Fehlern manchmal nicht neu am Bus.
+
+# 4. Hängende Aufträge verwerfen und neu drucken:
+cancel -a SELPHY
+
+# 5. CUPS-Logs ansehen:
+journalctl -u cups --since "10 minutes ago"
+sudo tail -n 50 /var/log/cups/error_log
+```
+
+> **Unterspannung prüfen:** Eine zu schwache Stromversorgung des Pi kann
+> die USB-Kommunikation mit dem Drucker stören (Gerät „verschwindet"
+> zeitweise vom Bus). Prüfen mit:
+>
+> ```bash
+> vcgencmd get_throttled
+> # 0x0     = alles in Ordnung
+> # ≠ 0x0   = Unterspannung/Drosselung (z. B. 0x50005) → offizielles
+> #           5,1-V/3-A-Netzteil verwenden, USB-Verbraucher reduzieren
+> ```
+
+### Weitere Symptome
 
 | Symptom | Ursache / Lösung |
 |---|---|
-| `Verfügbare Drucker: ['(keine)']` | Es ist keine CUPS-Warteschlange angelegt → Abschnitt 3 |
-| `CUPS IPP 1280 / No such file or directory` | Folgefehler von oben: Warteschlange existiert nicht |
-| `lsusb` zeigt keinen Canon | Kabel/Strom prüfen; Drucker muss eingeschaltet sein |
-| `lpinfo -m` kennt kein CP1500 | Gutenprint zu alt (< 5.3.5) → Weg B (WLAN) nutzen oder OS aktualisieren |
-| Auftrag hängt, Drucker druckt nicht über USB | `ipp-usb` deinstallieren (blockiert Gutenprint) oder Firmware aktualisieren |
-| `lpadmin: … nicht erlaubt` | Benutzer ist nicht in der Gruppe `lpadmin` → Abschnitt 2 |
+| `Verfügbare Drucker: ['(keine)']` | Keine CUPS-Warteschlange angelegt → Abschnitt 4 |
+| `CUPS IPP 1280 / No such file or directory` | Folgefehler: Warteschlange existiert nicht |
+| `lsusb` zeigt keinen Canon | Kabel/Strom prüfen; Drucker einschalten; anderes USB-Kabel/-Port testen |
+| `lpinfo -m` kennt kein CP1500 | Gutenprint < 5.3.5 aktiv → Abschnitt 3; danach `gutenprint-config --version` prüfen |
+| `checking for cups-config... no` beim `./configure` | `sudo apt install libcups2-dev libcupsimage2-dev`, dann `./configure` erneut |
+| `dpkg` zeigt 5.3.4 trotz Quellinstallation | Erwartet – maßgeblich ist `gutenprint-config --version` (Abschnitt 3.3) |
+| Auftrag hängt bei „Waiting for printer…" | Siehe oben: replug, `lpstat -t`, Logs, Unterspannung |
+| Drucker druckt, fällt dann aus | `vcgencmd get_throttled` prüfen (Unterspannung), `ipp-usb` entfernen |
+| `lpadmin: … nicht erlaubt` | Benutzer nicht in Gruppe `lpadmin` → Abschnitt 2 |
 | Python-Log: „pycups not available" | `sudo apt install python3-cups` |
-| Druck wird abgeschnitten/mit Rand | Papiergröße auf `Postcard` (100×148 mm) stellen, s. Abschnitt 3 |
-
-Logs ansehen:
-
-```bash
-journalctl -u cups --since "10 minutes ago"
-tail -f /var/log/cups/error_log
-```
+| Druck mit weißem Rand | Queue mit `expert`-PPD anlegen (Abschnitt 4.2); App setzt `StpBorderless=True` |
 
 ---
 
 ## Quellen
 
+- [Gutenprint 5.3.5 Release (SourceForge)](https://sourceforge.net/projects/gimp-print/files/gutenprint-5.3/5.3.5/)
+- [Gutenprint-Forum: Canon Selphy CP1500 (Unterstützung ab 5.3.5/Snapshots)](https://sourceforge.net/p/gimp-print/discussion/4359/thread/cf53575ce3/)
+- [pibooth Issue #268: Randlos-Druck auf SELPHY via CUPS/Gutenprint (StpBorderless, StpiShrinkOutput)](https://github.com/pibooth/pibooth/issues/268)
+- [OpenPrinting cups-filters #492: Randlos-Druck CP1500](https://github.com/OpenPrinting/cups-filters/issues/492)
 - [CUPS-Diskussion: CP1500 wird per USB nicht erkannt](https://github.com/OpenPrinting/cups/discussions/994)
 - [ipp-usb Issue #73: CP1500 einrichten schlägt fehl](https://github.com/OpenPrinting/ipp-usb/issues/73)
-- [Gutenprint-Forum: Canon Selphy CP1500](https://sourceforge.net/p/gimp-print/discussion/4359/thread/cf53575ce3/)
-- [Gutenprint 5.3.5 Release](https://sourceforge.net/projects/gimp-print/files/gutenprint-5.3/5.3.5/)
-- [Debian Bookworm: printer-driver-gutenprint (5.3.4-Snapshot)](https://packages.debian.org/bookworm/printer-driver-gutenprint)

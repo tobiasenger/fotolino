@@ -9,7 +9,10 @@
       "Bash(python3 -c \"import PyQt6; print\\('pyqt ok'\\)\")",
       "WebSearch",
       "Bash(python3 -m py_compile src/audio.py)",
-      "Bash(python3 -m py_compile src/constants.py src/ui/base_screen.py src/ui/screen_collage.py src/ui/screen_print.py)"
+      "Bash(python3 -m py_compile src/constants.py src/ui/base_screen.py src/ui/screen_collage.py src/ui/screen_print.py)",
+      "WebFetch(domain:sourceforge.net)",
+      "WebFetch(domain:github.com)",
+      "Bash(python3 -m py_compile src/printer.py)"
     ]
   }
 }

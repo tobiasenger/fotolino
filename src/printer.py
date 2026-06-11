@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -23,6 +24,31 @@ _DEMO_MSG = (
     "╚══════════════════════════════════════════════════════════╝"
 )
 
+# Druckoptionen für den Canon SELPHY CP1500 mit Gutenprint-5.3-PPD
+# (Treiber "gutenprint.5.3://canon-cp1500/expert", siehe PRINTER_SETUP.md).
+# Die Werte stammen aus dem PPD bzw. `lpoptions -p SELPHY -l`:
+#   PageSize ........... Postcard (100×148 mm, KP-108IN-Papier);
+#                        weitere PPD-Werte: w253h337 (L), w155h244 (Karte)
+#   StpBorderless ...... randloser Druck (zieht die Ränder auf 0)
+#   StpiShrinkOutput ... Expand = Bild auf die volle Seite aufziehen
+#   StpImageType ....... Farbabstimmung für Fotos
+#   fit-to-page ........ CUPS-Filter skaliert das JPEG auf die Seitengröße
+# Unbekannte Optionen werden von CUPS ignoriert (z. B. falls die Queue mit
+# dem "simple"-PPD statt "expert" angelegt wurde) – sie schaden also nicht.
+_PRINT_OPTIONS = {
+    "PageSize": "Postcard",
+    "StpBorderless": "True",
+    "StpiShrinkOutput": "Expand",
+    "StpImageType": "Photo",
+    "fit-to-page": "true",
+}
+
+# IPP-Job-Status (RFC 8011, Abschnitt 5.3.7)
+_JOB_STATES = {
+    3: "pending", 4: "held", 5: "processing", 6: "stopped",
+    7: "canceled", 8: "aborted", 9: "completed",
+}
+
 
 class Printer:
     def __init__(self, config_manager):
@@ -30,6 +56,7 @@ class Printer:
         self._printer_name = config_manager.settings.get("printer_name", "SELPHY")
         self._conn         = None
         self._target       = None  # tatsächlicher CUPS-Warteschlangenname
+        self._target_info  = {}    # CUPS-Attribute der Warteschlange (z. B. device-uri)
         self._connect()
 
     def _connect(self):
@@ -64,6 +91,7 @@ class Printer:
             logger.warning("CUPS-Abfrage fehlgeschlagen: %s", e)
             self._conn = None
             self._target = None
+            self._target_info = {}
             return None
 
         resolved = self._resolve_name(printers)
@@ -81,6 +109,7 @@ class Printer:
                 self._printer_name, resolved
             )
         self._target = resolved
+        self._target_info = printers.get(resolved, {}) if resolved else {}
         return resolved
 
     def _resolve_name(self, printers: dict) -> str | None:
@@ -143,21 +172,21 @@ class Printer:
             )
             return False
 
+        logger.info(
+            "Sende Druckauftrag: Warteschlange='%s', Geräte-URI='%s', "
+            "Drucker-Status=%s, Datei='%s', Optionen=%s",
+            target,
+            self._target_info.get("device-uri", "?"),
+            self._target_info.get("printer-state", "?"),
+            path, _PRINT_OPTIONS,
+        )
         try:
-            job_id = self._conn.printFile(
-                target,
-                str(path),
-                "Fotobox",
-                # SELPHY-Papier ist Postkarte 100×148 mm; "fit-to-page" für
-                # klassische PPD-Queues, "print-scaling" für driverless/IPP.
-                {"fit-to-page": "true", "print-scaling": "fill", "media": "Postcard"},
-            )
-            logger.info("Druckauftrag gesendet: Job-ID=%s, Datei=%s", job_id, path)
-            return True
+            job_id = self._conn.printFile(target, str(path), "Fotobox",
+                                          dict(_PRINT_OPTIONS))
         except cups.IPPError as e:
             logger.error(
                 "Druckfehler (CUPS IPP %s): %s. "
-                "Bitte prüfen: Drucker eingeschaltet? Kabel/WLAN verbunden? "
+                "Bitte prüfen: Drucker eingeschaltet? USB-Kabel verbunden? "
                 "Papier eingelegt? CUPS-Status: `lpstat -p %s`",
                 e.args[0] if e.args else "?", e, target
             )
@@ -169,6 +198,66 @@ class Printer:
                 e
             )
             return False
+
+        if not job_id:
+            logger.error(
+                "CUPS hat den Druckauftrag für '%s' ohne Job-ID abgelehnt "
+                "(Datei: %s).", target, path
+            )
+            return False
+        logger.info("Druckauftrag angenommen: Job-ID=%s, Warteschlange='%s', "
+                    "Datei='%s'", job_id, target, path)
+        return self._verify_job(job_id)
+
+    def _verify_job(self, job_id: int) -> bool:
+        """Kurz nachprüfen, ob CUPS den angenommenen Auftrag auch verarbeitet.
+
+        Läuft im Druck-Thread (nicht im GUI-Thread), darf also kurz blocken.
+        Verworfene Aufträge (aborted/canceled/stopped) werden als Fehler
+        gemeldet statt stillschweigend als Erfolg. Ein Auftrag, der nach der
+        Wartezeit noch 'pending' ist, gilt weiter als angenommen (z. B. weil
+        der vorige Druck noch läuft), wird aber mit der CUPS-Druckermeldung
+        protokolliert – dort steht z. B. 'Waiting for printer to become
+        available', wenn das USB-Backend den Drucker nicht öffnen kann.
+        """
+        attrs = {}
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                attrs = self._conn.getJobAttributes(job_id)
+            except Exception as e:
+                logger.warning(
+                    "Job-Status von Auftrag %s nicht abfragbar (%s) – "
+                    "Auftrag wurde aber von CUPS angenommen.", job_id, e
+                )
+                return True
+            state = attrs.get("job-state", 0)
+            if state in (5, 9):     # processing / completed
+                logger.info("Druckauftrag %s wird verarbeitet (Status=%s).",
+                            job_id, _JOB_STATES.get(state, state))
+                return True
+            if state in (6, 7, 8):  # stopped / canceled / aborted
+                logger.error(
+                    "Druckauftrag %s von CUPS verworfen: Status=%s, "
+                    "Gründe=%s, Druckermeldung='%s'. Siehe PRINTER_SETUP.md "
+                    "(Fehlersuche).",
+                    job_id, _JOB_STATES.get(state, state),
+                    attrs.get("job-state-reasons", "?"),
+                    attrs.get("job-printer-state-message", ""),
+                )
+                return False
+            time.sleep(0.5)
+
+        state = attrs.get("job-state", 0)
+        logger.warning(
+            "Druckauftrag %s nach 5 s noch nicht gestartet (Status=%s, "
+            "Druckermeldung='%s'). Falls die Meldung 'Waiting for printer to "
+            "become available' lautet: USB-Kabel ab- und wieder anstecken "
+            "bzw. Drucker aus- und einschalten (siehe PRINTER_SETUP.md).",
+            job_id, _JOB_STATES.get(state, state),
+            attrs.get("job-printer-state-message", ""),
+        )
+        return True
 
     def print_image(self, img: Image.Image) -> bool:
         """Save PIL image to a temp file and print it (CUPS copies it to its spool)."""
