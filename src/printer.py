@@ -49,6 +49,11 @@ _JOB_STATES = {
     7: "canceled", 8: "aborted", 9: "completed",
 }
 
+# Nicht abgeschlossene Aufträge, die älter sind, gelten als hängen geblieben
+# (ein SELPHY-Druck dauert ~45–60 s) und werden vor dem nächsten Druck
+# verworfen, damit der neue Auftrag nicht dahinter feststeckt.
+_STALE_JOB_SECONDS = 180
+
 
 class Printer:
     def __init__(self, config_manager):
@@ -57,6 +62,9 @@ class Printer:
         self._conn         = None
         self._target       = None  # tatsächlicher CUPS-Warteschlangenname
         self._target_info  = {}    # CUPS-Attribute der Warteschlange (z. B. device-uri)
+        self._usb_uri_warned = False
+        self._uri_misconfigured = False  # SELPHY hängt am Standard-USB-Backend
+        self._repair_attempted = False   # automatische Reparatur nur 1× je Lauf
         self._connect()
 
     def _connect(self):
@@ -110,6 +118,23 @@ class Printer:
             )
         self._target = resolved
         self._target_info = printers.get(resolved, {}) if resolved else {}
+
+        # Fehlkonfiguration erkennen: Ein SELPHY am Standard-USB-Backend
+        # bleibt bei 'Waiting for printer to become available' bzw. 'Daten
+        # werden empfangen' hängen. Vor dem nächsten Druck versucht die App
+        # einmalig, die Queue selbst umzustellen (_try_fix_device_uri).
+        uri = self._target_info.get("device-uri", "")
+        self._uri_misconfigured = bool(
+            resolved and uri.startswith("usb://") and "selphy" in uri.lower())
+        if self._uri_misconfigured and not self._usb_uri_warned:
+            self._usb_uri_warned = True
+            logger.warning(
+                "Warteschlange '%s' nutzt das Standard-USB-Backend (%s). "
+                "Der SELPHY braucht das Gutenprint-Backend "
+                "'gutenprint53+usb://…', sonst hängen Druckaufträge. "
+                "Reparatur: siehe PRINTER_FIX.md.",
+                resolved, uri,
+            )
         return resolved
 
     def _resolve_name(self, printers: dict) -> str | None:
@@ -171,6 +196,13 @@ class Printer:
                 self._printer_name, self._printer_name
             )
             return False
+
+        # Selbstheilung – läuft im Druck-Thread, darf also kurz blocken.
+        if self._uri_misconfigured and not self._repair_attempted:
+            self._repair_attempted = True
+            if self._try_fix_device_uri(target):
+                self._uri_misconfigured = False
+        self._prepare_queue(target)
 
         logger.info(
             "Sende Druckauftrag: Warteschlange='%s', Geräte-URI='%s', "
@@ -253,11 +285,109 @@ class Printer:
             "Druckauftrag %s nach 5 s noch nicht gestartet (Status=%s, "
             "Druckermeldung='%s'). Falls die Meldung 'Waiting for printer to "
             "become available' lautet: USB-Kabel ab- und wieder anstecken "
-            "bzw. Drucker aus- und einschalten (siehe PRINTER_SETUP.md).",
+            "bzw. Drucker aus- und einschalten (siehe PRINTER_FIX.md).",
             job_id, _JOB_STATES.get(state, state),
             attrs.get("job-printer-state-message", ""),
         )
         return True
+
+    # ------------------------------------------------------------------
+    # Queue-Selbstheilung
+    # ------------------------------------------------------------------
+
+    def _try_fix_device_uri(self, target: str) -> bool:
+        """Queue einmalig vom Standard-USB-Backend auf das Gutenprint-
+        SELPHY-Backend umstellen (wie `sudo lpadmin -p … -v gutenprint53+usb://…`).
+
+        Klappt nur, wenn der App-Benutzer CUPS-Verwaltungsrechte hat
+        (Gruppe `lpadmin`); andernfalls bleibt es bei der Warnung und der
+        manuellen Reparatur nach PRINTER_FIX.md.
+        """
+        bad_uri = self._target_info.get("device-uri", "")
+        try:
+            # Nur das eine Backend abfragen – ein voller Geräte-Scan
+            # (alle Backends) würde deutlich länger blockieren.
+            devices = self._conn.getDevices(
+                include_schemes=["gutenprint53+usb"], timeout=8)
+        except Exception as e:
+            logger.warning(
+                "Gerätesuche für die automatische Queue-Reparatur "
+                "fehlgeschlagen (%s) – manuelle Reparatur siehe "
+                "PRINTER_FIX.md.", e)
+            return False
+
+        candidates = [u for u in devices if u.startswith("gutenprint53+usb://")]
+        serial = bad_uri.rsplit("serial=", 1)[-1] if "serial=" in bad_uri else ""
+        good_uri = next((u for u in candidates if serial and serial in u), None)
+        if good_uri is None and len(candidates) == 1:
+            good_uri = candidates[0]
+        if good_uri is None:
+            logger.warning(
+                "Kein gutenprint53+usb-Gerät für die automatische Reparatur "
+                "gefunden (Kandidaten: %s). Drucker einschalten/anstecken, "
+                "sonst PRINTER_FIX.md beachten.", candidates or "(keine)")
+            return False
+
+        try:
+            self._conn.setPrinterDevice(target, good_uri)
+        except Exception as e:
+            logger.warning(
+                "Queue '%s' konnte nicht automatisch umgestellt werden (%s). "
+                "Manuell ausführen: `sudo lpadmin -p %s -v \"%s\"` "
+                "(siehe PRINTER_FIX.md).", target, e, target, good_uri)
+            return False
+        self._target_info["device-uri"] = good_uri
+        logger.warning(
+            "Warteschlange '%s' automatisch repariert: Geräte-URI von '%s' "
+            "auf '%s' umgestellt.", target, bad_uri, good_uri)
+        return True
+
+    def _prepare_queue(self, target: str):
+        """Warteschlange vor dem Druck in einen druckfähigen Zustand bringen.
+
+        Räumt bekannte Folgen einer zuvor hängenden Queue auf. Jeder Schritt
+        ist optional und scheitert nur mit Log-Eintrag, nie mit Exception:
+          * Von CUPS gestoppte Queue (printer-state 5) wieder aktivieren.
+          * Angehaltene/gestoppte sowie veraltete Aufträge verwerfen, damit
+            der neue Druck nicht dahinter feststeckt.
+        Frische 'pending'-Aufträge bleiben unangetastet: Bei Sitzungen kurz
+        hintereinander druckt der SELPHY u. U. noch den vorigen Auftrag –
+        ein pauschales cancel-all würde gültige Drucke vernichten.
+        """
+        if self._target_info.get("printer-state") == 5:    # 5 = stopped
+            try:
+                self._conn.enablePrinter(target)
+                self._conn.acceptJobs(target)
+                logger.warning(
+                    "Gestoppte Warteschlange '%s' wieder aktiviert.", target)
+            except Exception as e:
+                logger.warning(
+                    "Gestoppte Warteschlange '%s' konnte nicht reaktiviert "
+                    "werden (%s). Manuell: `sudo cupsenable %s && "
+                    "sudo cupsaccept %s`", target, e, target, target)
+
+        try:
+            jobs = self._conn.getJobs(which_jobs="not-completed")
+        except Exception as e:
+            logger.warning("CUPS-Jobliste nicht abfragbar: %s", e)
+            return
+        now = time.time()
+        for job_id, attrs in jobs.items():
+            if not str(attrs.get("job-printer-uri", "")).endswith("/" + target):
+                continue
+            state = attrs.get("job-state", 0)
+            age = now - attrs.get("time-at-creation", now)
+            if state in (4, 6) or age > _STALE_JOB_SECONDS:  # held/stopped/uralt
+                try:
+                    self._conn.cancelJob(job_id)
+                    logger.warning(
+                        "Hängenden Druckauftrag %s verworfen "
+                        "(Status=%s, Alter=%.0f s).",
+                        job_id, _JOB_STATES.get(state, state), age)
+                except Exception as e:
+                    logger.warning(
+                        "Auftrag %s konnte nicht verworfen werden: %s",
+                        job_id, e)
 
     def print_image(self, img: Image.Image) -> bool:
         """Save PIL image to a temp file and print it (CUPS copies it to its spool)."""

@@ -134,13 +134,21 @@ lsusb | grep -i canon
 
 # 2. Geräte-URI anzeigen lassen:
 lpinfo -v
-# Relevante Zeile, Beispiel:
+# Es erscheinen typischerweise ZWEI Zeilen für den Drucker, Beispiel:
 # direct usb://Canon/SELPHY%20CP1500?serial=CZ23011023417958
+# direct gutenprint53+usb://canon-selphy-cp1500/CZ23011023417958
 ```
 
+> **Die richtige URI wählen:** Es muss die Zeile verwendet werden, die mit
+> **`gutenprint53+usb://`** beginnt – das ist das SELPHY-eigene Backend aus
+> Gutenprint 5.3.5. Die `usb://Canon/...`-URI (Standard-USB-Backend) führt
+> dazu, dass Aufträge bei „Waiting for printer to become available" hängen
+> und der Drucker nach dem Druck auf „Daten werden empfangen" stehen bleibt
+> (Reparatur einer so angelegten Queue: siehe `PRINTER_FIX.md`).
+
 > **Achtung:** Das Wort `direct` am Zeilenanfang ist **nicht Teil der URI** –
-> es bezeichnet nur die Backend-Klasse. Die URI beginnt bei `usb://`.
-> Falsch: `-v "direct usb://Canon/..."` · Richtig: `-v "usb://Canon/..."`
+> es bezeichnet nur die Backend-Klasse. Die URI beginnt bei `gutenprint53+usb://`.
+> Falsch: `-v "direct gutenprint53+usb://..."` · Richtig: `-v "gutenprint53+usb://..."`
 
 ### 4.2 Warteschlange anlegen
 
@@ -148,7 +156,7 @@ URI aus Schritt 4.1 einsetzen (die Seriennummer ist bei jedem Gerät anders):
 
 ```bash
 sudo lpadmin -p SELPHY -E \
-  -v "usb://Canon/SELPHY%20CP1500?serial=CZ23011023417958" \
+  -v "gutenprint53+usb://canon-selphy-cp1500/CZ23011023417958" \
   -m "gutenprint.5.3://canon-cp1500/expert"
 
 # Papiergröße als Standard setzen und als Standarddrucker markieren:
@@ -158,7 +166,7 @@ sudo lpoptions -d SELPHY
 
 - `-p SELPHY` – Name der Warteschlange (muss zu `printer_name` in der App passen)
 - `-E` – Warteschlange aktivieren und Aufträge annehmen
-- `-v` – die Geräte-URI aus `lpinfo -v` (ohne `direct`!)
+- `-v` – die `gutenprint53+usb://`-URI aus `lpinfo -v` (ohne `direct`!)
 - `-m` – der Gutenprint-5.3.5-Treiber aus `lpinfo -m | grep -i cp1500`
   (Variante `expert` verwenden – sie stellt die Randlos-Optionen bereit,
   die die Fotobox setzt)
@@ -186,8 +194,9 @@ lp -d SELPHY -o PageSize=Postcard -o fit-to-page /usr/share/cups/data/testprint
 ```
 
 > Falls der Testdruck mit „Waiting for printer to become available" hängt:
-> USB-Kabel des Druckers **ab- und wieder anstecken** (siehe Fehlersuche) –
-> das war auch bei der Ersteinrichtung dieses Geräts nötig.
+> zuerst mit `lpstat -t` prüfen, ob die Geräte-URI wirklich mit
+> `gutenprint53+usb://` beginnt (sonst → `PRINTER_FIX.md`); danach
+> USB-Kabel des Druckers ab- und wieder anstecken (siehe Fehlersuche).
 
 Danach die Fotobox starten – die Warnung
 „Drucker 'SELPHY' nicht in CUPS gefunden" darf nicht mehr erscheinen.
@@ -260,7 +269,8 @@ sudo tail -n 50 /var/log/cups/error_log
 | `lpinfo -m` kennt kein CP1500 | Gutenprint < 5.3.5 aktiv → Abschnitt 3; danach `gutenprint-config --version` prüfen |
 | `checking for cups-config... no` beim `./configure` | `sudo apt install libcups2-dev libcupsimage2-dev`, dann `./configure` erneut |
 | `dpkg` zeigt 5.3.4 trotz Quellinstallation | Erwartet – maßgeblich ist `gutenprint-config --version` (Abschnitt 3.3) |
-| Auftrag hängt bei „Waiting for printer…" | Siehe oben: replug, `lpstat -t`, Logs, Unterspannung |
+| Auftrag hängt bei „Waiting for printer…" | Queue nutzt das falsche `usb://`-Backend → `PRINTER_FIX.md`; sonst: replug, `lpstat -t`, Logs, Unterspannung |
+| Druck erst nach Aus-/Einschalten; Drucker bleibt auf „Daten werden empfangen" | Queue nutzt das Standard-`usb://`-Backend statt `gutenprint53+usb://` → Reparatur siehe `PRINTER_FIX.md` |
 | Drucker druckt, fällt dann aus | `vcgencmd get_throttled` prüfen (Unterspannung), `ipp-usb` entfernen |
 | `lpadmin: … nicht erlaubt` | Benutzer nicht in Gruppe `lpadmin` → Abschnitt 2 |
 | Python-Log: „pycups not available" | `sudo apt install python3-cups` |
