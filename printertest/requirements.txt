@@ -1,0 +1,8 @@
+# Auf Raspberry Pi OS NICHT mit pip installieren, sondern per apt:
+#
+#   sudo apt install python3-cups python3-pil
+#
+# Diese Datei dokumentiert die Abhängigkeiten nur für andere Umgebungen.
+
+pycups>=2.0.1        # CUPS-Anbindung (Pflicht) — apt: python3-cups
+Pillow>=9.0          # Testseiten mit Beschriftung (optional) — apt: python3-pil

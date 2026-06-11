@@ -14,7 +14,13 @@
       "WebFetch(domain:github.com)",
       "Bash(python3 -m py_compile src/printer.py)",
       "WebFetch(domain:nagyak.eastron.hu)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python3 -m py_compile selphy_test.py selphytest/*.py)",
+      "Bash(python3 selphy_test.py --help)",
+      "Bash(python3 selphy_test.py matrix --help)",
+      "Bash(python3 selphy_test.py printers)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(python3 -)"
     ]
   }
 }
