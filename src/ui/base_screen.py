@@ -9,12 +9,15 @@ and starting the music of an image+audio scene.
 from __future__ import annotations
 
 import logging
+import threading
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtGui import QColor, QMovie, QPainter, QPixmap
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QProgressBar, QWidget
 
 from ..constants import COLOR_BG, PROGRESS_BAR_H, SCREEN_H, SCREEN_W
+from . import theme
 
 logger = logging.getLogger(__name__)
 
@@ -58,15 +61,31 @@ class BaseScreen(QWidget):
         """Start the audio track of an image+audio scene (no-op otherwise)."""
         if not scene or scene.get("media_type") != "photo":
             return
-        audio = scene.get("audio", "")
+        self._play_audio_file(scene.get("audio", ""))
+
+    def _play_audio_file(self, audio: str):
+        """Play an audio file once (relative to project root, no-op if empty)."""
         if not audio:
             return
         p = self.app.config.resolve_asset(audio)
         if p.exists():
             self.app.audio.play_music(p)
         else:
-            logger.warning("Szenen-Audio-Datei fehlt: %s – Szene läuft ohne Ton. "
-                           "Pfad im Admin-Szeneneditor prüfen.", p)
+            logger.warning("Audio-Datei fehlt: %s – läuft ohne Ton. "
+                           "Pfad im Admin-Bereich prüfen.", p)
+
+    def _print_collage_file(self, path):
+        """Send a finished collage file to the printer in a background thread."""
+        def do_print():
+            success = self.app.printer.print_collage(Path(path))
+            if not success and not self.app.printer.is_demo():
+                self.app.show_notification(
+                    "Druck fehlgeschlagen – Details in fotobox.log. "
+                    "Drucker, Papier und CUPS-Status prüfen.",
+                    duration=10.0, level="error",
+                )
+
+        threading.Thread(target=do_print, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Background / pixmap helpers
@@ -205,6 +224,24 @@ class BaseScreen(QWidget):
                            rect.y() - (scaled.height() - rect.height()) // 2,
                            scaled)
         painter.restore()
+
+    def _make_progress_bar(self) -> QProgressBar:
+        """Create the bottom progress bar used by the timed screens."""
+        bar = QProgressBar(self)
+        bar.setRange(0, 100)
+        bar.setTextVisible(False)
+        return bar
+
+    def _reset_progress_bar(self, bar: QProgressBar):
+        """Re-style, reset and position the bar on screen entry (respects the
+        configured color and the progress_bar_enabled setting)."""
+        cfg = self.app.config
+        bar.setStyleSheet(theme.progress_bar_style(
+            cfg.settings.get("loading_bar_color", "#FF6600")))
+        bar.setValue(0)
+        self._position_progress_bar(bar)
+        bar.setVisible(cfg.settings.get("progress_bar_enabled", True))
+        bar.raise_()
 
     def _position_progress_bar(self, bar):
         """Place a progress bar full-width, flush with the bottom edge."""

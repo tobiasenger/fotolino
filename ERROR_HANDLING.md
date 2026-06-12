@@ -219,11 +219,14 @@ Queue: **PRINTER_FIX.md**
 | Meldung | Level | Bedeutung | Behebung |
 |---|---|---|---|
 | Bildschirm: `Keine Pfade konfiguriert – Admin-Taste drücken` | warning | Start gedrückt, aber es ist kein Ablauf-Pfad angelegt | Im Admin-Bereich (F1) mindestens einen Pfad anlegen |
-| Bildschirm: `Pfad '…' hat keine Begrüßungsszene/Collage-Szene/Druck-Szene.` | error | Der ausgewählte Pfad verweist nicht auf alle nötigen Szenen | Pfad im Admin-Bereich vervollständigen |
+| Bildschirm: `Pfad '…' hat keine Begrüßungsszene/Collage-Szene/Druck-Szene.` | error | Der ausgewählte Standard-Pfad verweist nicht auf alle nötigen Szenen | Pfad im Admin-Bereich vervollständigen |
+| Bildschirm: `Pfad '…' hat keine Segmente.` / `Segment … hat keine Bilddatei/GIF-Datei/gültige Fotoanzahl` | error | Ein individueller Pfad ist unvollständig konfiguriert (z. B. von Hand editierte `paths.json`) | Pfad im Admin-Bereich öffnen, Segment vervollständigen und neu speichern |
+| Bildschirm: `Druckfehler: Keine Collage vorhanden – das Druck-Segment benötigt ein vorheriges Aufnahme-Segment …` | error | Ein Druck-Segment lief, ohne dass in diesem Durchlauf eine Collage entstand und ohne gespeicherte Collage auf dem USB-Stick | Im Pfad ein Aufnahme-Segment vor dem Druck-Segment einplanen |
+| `GIF-Datei fehlt: … – Segment zeigt einen schwarzen Bildschirm.` | WARNING | Ein GIF-Segment verweist auf eine fehlende/defekte Datei | Pfad im Admin-Bereich korrigieren |
 | `Unbekannter Screen angefordert: '…' – Wechsel ignoriert` | WARNING | Interner Programmfehler (sollte nie auftreten) | Bitte als Bug melden/notieren |
 | `Screen-Wechsel: …` | INFO | Normaler Ablauf – zeigt im Log nach, wo eine Sitzung stand | – |
 | `Bild-Datei fehlt: … – Standardhintergrund wird verwendet.` | WARNING | Szenen-/Hintergrundbild verweist auf eine fehlende Datei | Pfad im Admin-Bereich korrigieren |
-| `Szenen-Audio-Datei fehlt: … – Szene läuft ohne Ton.` | WARNING | Wie oben, für die Tonspur einer Szene | Pfad im Admin-Szeneneditor korrigieren |
+| `Audio-Datei fehlt: … – läuft ohne Ton.` | WARNING | Wie oben, für die Tonspur einer Szene oder eines Segments | Pfad im Admin-Bereich (Szenen-Editor bzw. Pfad-Segment) korrigieren |
 | `Admin-Design '…' nicht lesbar – eingebautes Standard-Design wird verwendet.` | WARNING | Die QSS-Datei aus `assets/themes/` fehlt oder ist nicht lesbar; der Admin-Bereich bleibt voll bedienbar | Datei wiederherstellen oder Einstellung `admin_theme` korrigieren (ADMIN_DESIGN.md) |
 | `Fehler beim Verlassen des Screens '…' während des Beendens` | ERROR | Aufräumfehler beim App-Ende – kosmetisch, da die App ohnehin beendet wird | Nur bei reproduzierbarem Auftreten relevant (Stacktrace im Log) |
 

@@ -17,10 +17,8 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QPainter, QPixmap
-from PyQt6.QtWidgets import QProgressBar
 
 from ..constants import MEDIA_PANEL_RECT, SCENE_DURATION_DEFAULTS
-from . import theme
 from .base_screen import BaseScreen
 
 logger = logging.getLogger(__name__)
@@ -56,9 +54,7 @@ class CollageScreen(BaseScreen):
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._tick)
 
-        self._progress = QProgressBar(self)
-        self._progress.setRange(0, 100)
-        self._progress.setTextVisible(False)
+        self._progress = self._make_progress_bar()
 
     # ------------------------------------------------------------------
 
@@ -83,12 +79,7 @@ class CollageScreen(BaseScreen):
         self._apply_screen_overlay("collage")
         self._start_scene_music(self._scene)
 
-        self._progress.setStyleSheet(theme.progress_bar_style(
-            cfg.settings.get("loading_bar_color", "#FF6600")))
-        self._progress.setValue(0)
-        self._position_progress()
-        self._progress.setVisible(cfg.settings.get("progress_bar_enabled", True))
-        self._progress.raise_()
+        self._reset_progress_bar(self._progress)
 
         threading.Thread(target=self._create_collage, daemon=True).start()
 
@@ -125,11 +116,8 @@ class CollageScreen(BaseScreen):
     # ------------------------------------------------------------------
 
     def resizeEvent(self, event):
-        self._position_progress()
-        super().resizeEvent(event)
-
-    def _position_progress(self):
         self._position_progress_bar(self._progress)
+        super().resizeEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)

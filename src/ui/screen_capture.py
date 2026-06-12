@@ -54,7 +54,9 @@ class CaptureScreen(BaseScreen):
     # ------------------------------------------------------------------
 
     def on_enter(self):
-        self._total_photos = self.app.context.capture_count()
+        ctx = self.app.context
+        ctx.captured_photos = []   # each capture (segment) starts a fresh set
+        self._total_photos = ctx.capture_count()
         self._photo_idx = 0
         self._timing = self.app.config.settings.get("capture_timing", {})
         self._smile_pixmaps = [
@@ -126,7 +128,7 @@ class CaptureScreen(BaseScreen):
             if t >= post_dur:
                 self._photo_idx += 1
                 if self._photo_idx >= self._total_photos:
-                    self.transition_to("collage")
+                    self._finish_captures()
                     return
                 self._set_phase(_Phase.COUNTDOWN)
 
@@ -136,6 +138,15 @@ class CaptureScreen(BaseScreen):
             except Exception:
                 self._preview_pixmap = None
         self.update()
+
+    def _finish_captures(self):
+        """All photos taken: standard paths show the collage screen; custom
+        paths build the collage in the background and continue the sequence."""
+        if self.app.context.is_custom_path():
+            self.app.start_collage_build()
+            self.app.advance_segment()
+        else:
+            self.transition_to("collage")
 
     # ------------------------------------------------------------------
 

@@ -118,12 +118,17 @@ Die Laufzeit einer Szene folgt automatisch der Länge des Videos oder der MP3-Da
 
 ### 2.2 `config/paths.json` – Pfad-Definitionen
 
+Es gibt zwei Pfadtypen (`type`): **Standard-Pfade** verknüpfen Szenen zum
+festen Ablauf Begrüßung → Fotos → Collage → Druck. **Individuelle Pfade**
+(`"type": "custom"`) bestehen aus einer freien Abfolge von 1–6 Segmenten.
+
 ```json
 {
   "paths": [
     {
       "id": "path_001",
       "name": "Standard-Pfad",
+      "type": "standard",
       "probability": 73,
       "is_default": true,
       "scenes": {
@@ -135,23 +140,50 @@ Die Laufzeit einer Szene folgt automatisch der Länge des Videos oder der MP3-Da
     },
     {
       "id": "path_002",
-      "name": "Nur Begrüßung (kein Foto)",
+      "name": "Überraschung",
+      "type": "custom",
       "probability": 2,
       "is_default": false,
-      "scenes": {
-        "greeting": "scene_002",
-        "capture_count": 0
-      }
+      "segments": [
+        { "type": "image",   "image": "assets/intro.jpg", "overlay": "", "audio": "assets/hello.mp3", "duration": 8 },
+        { "type": "gif",     "gif": "assets/confetti.gif", "audio": "", "duration": 5, "loop": false },
+        { "type": "camera",  "overlay": "assets/frame.png", "audio": "", "duration": 10 },
+        { "type": "capture", "capture_count": 3 },
+        { "type": "print",
+          "collage_image": "assets/collage_bg.jpg", "collage_overlay": "", "collage_audio": "",
+          "print_image": "assets/print_bg.jpg", "print_overlay": "", "print_audio": "" }
+      ]
     }
   ]
 }
 ```
 
 **Wahrscheinlichkeitslogik:**
-- Pfad 1 (Default) erhält automatisch die Restwahrscheinlichkeit: `100% – Summe aller anderen Pfade`.
+- Pfad 1 (Default, ★) erhält automatisch die Restwahrscheinlichkeit: `100% – Summe aller anderen Pfade`.
 - Alle weiteren Pfade haben manuell eingetragene Prozentwerte, die vom Default abgezogen werden.
-- `capture_count: 0` bedeutet: Pfad endet nach der Begrüßungsszene. `collage` und `print` sind dann nicht erforderlich.
-- Bei `capture_count` 1–4 müssen `collage` und `print` zwingend gesetzt sein.
+
+**Standard-Pfade:**
+- `capture_count` ist 1–4; `collage` und `print` müssen gesetzt sein.
+- (Altbestand: `capture_count: 0` – Pfad endet nach der Begrüßung – wird zur
+  Laufzeit noch unterstützt, ist im Editor aber nicht mehr wählbar. Abläufe
+  ohne Foto werden jetzt über individuelle Pfade abgebildet.)
+
+**Individuelle Pfade (Segmente, 1–6, Wiederholungen erlaubt):**
+
+| Segmenttyp | Felder | Verhalten |
+|------------|--------|-----------|
+| `image`    | `image` (Pflicht), `overlay`, `audio`, `duration` | Vollbild-Bild für `duration` Sekunden |
+| `gif`      | `gif` (Pflicht), `audio`, `duration`, `loop` | Vollbild-GIF; `loop: true` = Schleife bis Segmentende, `false` = einmal abspielen, danach Schwarzbild |
+| `camera`   | `overlay`, `audio`, `duration` | Live-Kamerabild (Spiegel) ohne Aufnahme |
+| `capture`  | `capture_count` (1–4) | Standard-Aufnahmeablauf; die Collage wird danach im Hintergrund erstellt und gespeichert |
+| `print`    | `collage_image`, `collage_overlay`, `collage_audio`, `print_image`, `print_overlay`, `print_audio` | Zwei Phasen wie die Standard-Screens: zuerst die Collage-Anzeige (Diashow der Fotos, Dauer = Collage-Dauer), danach der Druck der zuletzt erstellten Collage (Dauer = Druckdauer, beides Einstellungen → „Zeiten“). Hintergrund, Overlay und Audio sind pro Phase konfigurierbar |
+
+- Audio (`audio`, MP3/WAV/OGG) spielt pro Segment genau einmal ab Segmentstart, danach Stille. Ein `print`-Segment spielt pro Phase ein Audio; wie bei Standard-Szenen darf es höchstens so lang sein wie die jeweilige konfigurierte Dauer.
+- Ein `print`-Segment benötigt ein vorheriges `capture`-Segment im selben
+  Durchlauf; gibt es keines, wird ersatzweise die neueste auf dem USB-Stick
+  gespeicherte Collage gedruckt.
+- Altbestand: `print`-Segmente mit den flachen Schlüsseln `image`/`overlay`/`audio`
+  werden weiterhin gelesen (sie gelten für die Druck-Phase).
 
 ### 2.3 `config/settings.json` – Globale Einstellungen
 

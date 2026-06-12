@@ -14,25 +14,23 @@ Three screens, all driven by two buttons:
     back to the start screen. Demo mode only simulates the print.
 
 The background images of the browse and print screens and a PNG overlay
-for the print screen are configured in the admin menu (settings.json key
-"gallery").
+per view (menu, browse, print) are configured in the admin menu
+(settings.json key "gallery"). The gallery can be disabled entirely there
+("enabled"); the gallery button is then ignored.
 """
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QPainter, QPixmap
-from PyQt6.QtWidgets import QProgressBar
 
 from ..constants import (
     FONT_LARGE, FONT_MEDIUM, FONT_SMALL, MEDIA_PANEL_RECT,
     SCENE_DURATION_DEFAULTS, SCREEN_W,
 )
-from . import theme
 from .base_screen import BaseScreen
 from .widgets import draw_shadow_text
 
@@ -40,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 _ACCENT_RGB = (255, 102, 0)
 _WHITE = (255, 255, 255)
-_MUTED = (190, 190, 200)
 
 
 class GalleryMenuScreen(BaseScreen):
@@ -54,8 +51,9 @@ class GalleryMenuScreen(BaseScreen):
 
     def on_enter(self):
         self._selected = 0
-        self._set_background(self._load_pixmap(
-            self.app.config.gallery_background()))
+        cfg = self.app.config
+        self._set_background(self._load_pixmap(cfg.gallery_background()))
+        self._set_overlay(cfg.gallery_background("menu_overlay"))
 
     def handle_button(self, action: str) -> bool:
         if action == "gallery_button":
@@ -75,6 +73,7 @@ class GalleryMenuScreen(BaseScreen):
     def paintEvent(self, event):
         painter = QPainter(self)
         self._paint_background(painter)
+        self._paint_overlay(painter)
 
         r = self._design_rect(0, 120, SCREEN_W, 140)
         draw_shadow_text(painter, r.x(), r.y(), r.width(), r.height(),
@@ -88,11 +87,6 @@ class GalleryMenuScreen(BaseScreen):
             else:
                 draw_shadow_text(painter, r.x(), r.y(), r.width(), r.height(),
                                  label, FONT_LARGE, _WHITE)
-
-        r = self._design_rect(0, 980, SCREEN_W, 70)
-        draw_shadow_text(painter, r.x(), r.y(), r.width(), r.height(),
-                         "Galerie-Taste: Auswahl  ·  Start-Taste: Bestätigen",
-                         FONT_SMALL, _MUTED)
         painter.end()
 
 
@@ -113,6 +107,7 @@ class GalleryBrowseScreen(BaseScreen):
     def on_enter(self):
         cfg = self.app.config
         self._set_background(self._load_pixmap(cfg.gallery_background()))
+        self._set_overlay(cfg.gallery_background("browse_overlay"))
         if self._mode == "photos":
             self._files = self.app.storage.last_session_photos()
         else:
@@ -157,24 +152,23 @@ class GalleryBrowseScreen(BaseScreen):
         painter = QPainter(self)
         self._paint_background(painter)
         if not self._files:
+            self._paint_overlay(painter)
             label = ("Keine Fotos vorhanden" if self._mode == "photos"
                      else "Keine Collage vorhanden")
             r = self._design_rect(0, 440, SCREEN_W, 200)
             draw_shadow_text(painter, r.x(), r.y(), r.width(), r.height(),
                              label, FONT_MEDIUM, _WHITE)
-            hint = "Beliebige Taste: Zurück zum Menü"
         else:
             if self._current_pixmap:
                 self._draw_cover_in_rect(painter, self._current_pixmap,
                                          self._design_rect(*MEDIA_PANEL_RECT))
-            r = self._design_rect(0, 850, SCREEN_W, 70)
-            draw_shadow_text(painter, r.x(), r.y(), r.width(), r.height(),
-                             f"{self._idx + 1} / {len(self._files)}",
-                             FONT_SMALL, _WHITE)
-            hint = "Galerie-Taste: Weiter  ·  Start-Taste: Drucken"
-        r = self._design_rect(0, 980, SCREEN_W, 70)
-        draw_shadow_text(painter, r.x(), r.y(), r.width(), r.height(),
-                         hint, FONT_SMALL, _MUTED)
+            self._paint_overlay(painter)
+            # The single collage needs no position indicator.
+            if self._mode == "photos":
+                r = self._design_rect(0, 850, SCREEN_W, 70)
+                draw_shadow_text(painter, r.x(), r.y(), r.width(), r.height(),
+                                 f"{self._idx + 1} von {len(self._files)}",
+                                 FONT_SMALL, _WHITE)
         painter.end()
 
 
@@ -193,9 +187,7 @@ class GalleryPrintScreen(BaseScreen):
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._tick)
 
-        self._progress = QProgressBar(self)
-        self._progress.setRange(0, 100)
-        self._progress.setTextVisible(False)
+        self._progress = self._make_progress_bar()
 
     def set_file(self, path: Path):
         """Must be called before switching to this screen."""
@@ -213,12 +205,7 @@ class GalleryPrintScreen(BaseScreen):
         if self._pixmap.isNull():
             self._pixmap = None
 
-        self._progress.setStyleSheet(theme.progress_bar_style(
-            cfg.settings.get("loading_bar_color", "#FF6600")))
-        self._progress.setValue(0)
-        self._position_progress_bar(self._progress)
-        self._progress.setVisible(cfg.settings.get("progress_bar_enabled", True))
-        self._progress.raise_()
+        self._reset_progress_bar(self._progress)
 
         self._send_print()
         self._start_time = time.monotonic()
@@ -258,15 +245,4 @@ class GalleryPrintScreen(BaseScreen):
             self.app.show_notification(
                 "Druckfehler: Keine Datei ausgewählt.", level="error")
             return
-        path = self._file
-
-        def do_print():
-            success = self.app.printer.print_collage(path)
-            if not success and not self.app.printer.is_demo():
-                self.app.show_notification(
-                    "Druck fehlgeschlagen – Details in fotobox.log. "
-                    "Drucker, Papier und CUPS-Status prüfen.",
-                    duration=10.0, level="error",
-                )
-
-        threading.Thread(target=do_print, daemon=True).start()
+        self._print_collage_file(self._file)

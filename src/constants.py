@@ -41,6 +41,12 @@ PROGRESS_BAR_H = 8
 # Base background color used when a screen has no background image
 COLOR_BG = (10, 10, 20)
 
+# Custom paths (admin "Pfade" tab): free sequence of segments instead of the
+# fixed greeting→capture→collage→print flow.
+MAX_PATH_SEGMENTS = 6
+SEGMENT_DURATION_RANGE = (1.0, 300.0)   # allowed segment duration in seconds
+SEGMENT_DURATION_DEFAULT = 5.0
+
 # Scene durations are configured in the admin menu (settings.json key
 # "scene_durations"). These are the allowed value ranges per setting and
 # the factory defaults.

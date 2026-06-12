@@ -146,10 +146,17 @@ class AdminSettings(QWidget):
         add_form_section(f, "Galerie")
         f.addRow(make_hint(
             "Galerie-Modus (dritter Button bzw. Taste L): die Fotos und die "
-            "Collage der letzten Sitzung ansehen und nachdrucken."))
+            "Collage der letzten Sitzung ansehen und nachdrucken. "
+            "Deaktiviert = der Galerie-Button ist ohne Funktion."))
         gal = cfg.get("gallery", {})
+        self._combo("gallery_enabled", [("Ja", True), ("Nein", False)],
+                    gal.get("enabled", True), f, "Galerie aktiv:")
         self._file_row("gallery_bg", gal.get("background", ""), f,
                        "Hintergrundbild:", _IMAGE_EXTS, "Hintergrund")
+        self._file_row("gallery_menu_overlay", gal.get("menu_overlay", ""), f,
+                       "Overlay Menü (PNG):", _PNG_EXTS, "Overlay")
+        self._file_row("gallery_browse_overlay", gal.get("browse_overlay", ""), f,
+                       "Overlay Durchblättern (PNG):", _PNG_EXTS, "Overlay")
         self._file_row("gallery_print_bg", gal.get("print_background", ""), f,
                        "Hintergrund Druckansicht:", _IMAGE_EXTS, "Hintergrund")
         self._file_row("gallery_print_overlay", gal.get("print_overlay", ""), f,
@@ -372,7 +379,10 @@ class AdminSettings(QWidget):
             cfg["screen_height"] = sh
 
         gal = cfg.setdefault("gallery", {})
+        gal["enabled"] = bool(self._get("gallery_enabled"))
         gal["background"] = self._get("gallery_bg") or ""
+        gal["menu_overlay"] = self._get("gallery_menu_overlay") or ""
+        gal["browse_overlay"] = self._get("gallery_browse_overlay") or ""
         gal["print_background"] = self._get("gallery_print_bg") or ""
         gal["print_overlay"] = self._get("gallery_print_overlay") or ""
         gal.pop("photo_count", None)     # removed settings from older versions

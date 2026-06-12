@@ -34,7 +34,9 @@
       "Bash(python3 -c \"import PyQt6\")",
       "Bash(ls config/)",
       "Bash(python3 -m py_compile src/storage.py src/config_manager.py src/ui/screen_capture.py src/ui/admin/admin_settings.py)",
-      "Bash(python3 -m py_compile src/main.py)"
+      "Bash(python3 -m py_compile src/main.py)",
+      "Bash(python3 -m py_compile src/constants.py src/state.py src/app.py src/ui/base_screen.py src/ui/screen_segment.py src/ui/screen_capture.py src/ui/screen_intro.py src/ui/screen_print.py src/ui/screen_collage.py src/ui/screen_gallery.py src/ui/admin/admin_paths.py)",
+      "Bash(python3 -m py_compile src/ui/screen_segment.py src/ui/screen_gallery.py src/ui/admin/admin_paths.py src/ui/admin/admin_settings.py src/config_manager.py src/app.py)"
     ]
   }
 }

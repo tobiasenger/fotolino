@@ -7,6 +7,7 @@ AppState the application is in while the screen is active.
 from __future__ import annotations
 
 import logging
+import threading
 
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget
@@ -15,7 +16,7 @@ from src.audio import AudioPlayer
 from src.camera import CameraController
 from src.collage import CollageCreator
 from src.config_manager import ConfigManager
-from src.constants import SCREEN_H, SCREEN_W
+from src.constants import MAX_PATH_SEGMENTS, SCREEN_H, SCREEN_W
 from src.gpio_handler import GPIOHandler
 from src.printer import Printer
 from src.state import AppContext, AppState
@@ -29,6 +30,7 @@ from src.ui.screen_gallery import (
 )
 from src.ui.screen_intro import IntroScreen
 from src.ui.screen_print import PrintScreen
+from src.ui.screen_segment import SegmentScreen
 from src.ui.screen_start import StartScreen
 from src.ui.widgets import NotificationLabel
 
@@ -41,6 +43,7 @@ _SCREEN_DEFS = (
     ("capture", CaptureScreen, AppState.CAPTURE),
     ("collage", CollageScreen, AppState.COLLAGE),
     ("print", PrintScreen, AppState.PRINT),
+    ("segment", SegmentScreen, AppState.SEGMENT),
     ("gallery_menu", GalleryMenuScreen, AppState.GALLERY),
     ("gallery_browse", GalleryBrowseScreen, AppState.GALLERY),
     ("gallery_print", GalleryPrintScreen, AppState.GALLERY),
@@ -56,6 +59,7 @@ class FotoboxApp(QMainWindow):
     # Queued signals so GPIO callbacks / worker threads safely reach the GUI thread.
     _gpio_button = pyqtSignal(str)
     _notify = pyqtSignal(str, float, str)
+    _collage_built = pyqtSignal(object, bool)   # (saved path str | None, error)
 
     def __init__(self, dev_mode: bool = False):
         super().__init__()
@@ -95,6 +99,7 @@ class FotoboxApp(QMainWindow):
         self.gpio = GPIOHandler(self.config, self._gpio_button.emit)
 
         self._notify.connect(self._show_notification)
+        self._collage_built.connect(self._on_collage_built)
 
     def _init_ui(self):
         self.stack = QStackedWidget(self)
@@ -169,7 +174,8 @@ class FotoboxApp(QMainWindow):
             if self.context.state == AppState.READY:
                 self._start_session()
         elif action == "gallery_button":
-            if self.context.state == AppState.READY:
+            if (self.context.state == AppState.READY
+                    and self.config.gallery_enabled()):
                 self.switch_screen("gallery_menu")
         elif action == "admin_button":
             if self.context.state == AppState.ADMIN:
@@ -190,17 +196,29 @@ class FotoboxApp(QMainWindow):
         if error:
             self.show_notification(error, duration=8.0, level="error")
             return
-        if path.get("scenes", {}).get("capture_count", 0) > 0 \
-                and not self.storage.usb_available():
+        if self._path_takes_photos(path) and not self.storage.usb_available():
             self.show_notification("USB-Stick nicht gefunden", level="warning")
         self.context.start_path(path)
-        self.switch_screen("intro")
+        if self.context.is_custom_path():
+            self._enter_segment()
+        else:
+            self.switch_screen("intro")
+
+    @staticmethod
+    def _path_takes_photos(path: dict) -> bool:
+        """True if the path captures photos (and therefore needs the USB stick)."""
+        if path.get("type") == "custom":
+            return any(s.get("type") == "capture"
+                       for s in path.get("segments", []))
+        return path.get("scenes", {}).get("capture_count", 0) > 0
 
     @staticmethod
     def _path_config_error(path: dict) -> str | None:
-        """Validate that the chosen path references all scenes it needs."""
-        scenes = path.get("scenes", {})
+        """Validate that the chosen path references everything it needs."""
         name = path.get("name", "?")
+        if path.get("type") == "custom":
+            return FotoboxApp._custom_path_error(name, path.get("segments", []))
+        scenes = path.get("scenes", {})
         if not scenes.get("greeting"):
             return f"Pfad '{name}' hat keine Begrüßungsszene."
         if scenes.get("capture_count", 0) > 0:
@@ -209,6 +227,84 @@ class FotoboxApp(QMainWindow):
             if not scenes.get("print"):
                 return f"Pfad '{name}' hat keine Druck-Szene."
         return None
+
+    @staticmethod
+    def _custom_path_error(name: str, segments: list) -> str | None:
+        if not segments:
+            return f"Pfad '{name}' hat keine Segmente."
+        if len(segments) > MAX_PATH_SEGMENTS:
+            return f"Pfad '{name}' hat mehr als {MAX_PATH_SEGMENTS} Segmente."
+        for i, seg in enumerate(segments, start=1):
+            stype = seg.get("type")
+            if stype not in ("image", "gif", "camera", "capture", "print"):
+                return f"Pfad '{name}': Segment {i} hat einen unbekannten Typ."
+            if stype == "image" and not seg.get("image"):
+                return f"Pfad '{name}': Segment {i} (Bild) hat keine Bilddatei."
+            if stype == "gif" and not seg.get("gif"):
+                return f"Pfad '{name}': Segment {i} (GIF) hat keine GIF-Datei."
+            if stype == "capture":
+                try:
+                    count = int(seg.get("capture_count", 0))
+                except (TypeError, ValueError):
+                    count = 0
+                if not 1 <= count <= 4:
+                    return (f"Pfad '{name}': Segment {i} (Aufnahme) hat keine "
+                            f"gültige Fotoanzahl (1–4).")
+        return None
+
+    # ------------------------------------------------------------------
+    # Custom path flow (segment sequence)
+    # ------------------------------------------------------------------
+
+    def _enter_segment(self):
+        """Show the screen for the current segment of a running custom path."""
+        segment = self.context.current_segment()
+        if segment is None:   # defensive – paths are validated before start
+            self.context.end_session()
+            self.switch_screen("start")
+            return
+        self.switch_screen(
+            "capture" if segment.get("type") == "capture" else "segment")
+
+    def advance_segment(self):
+        """Called by the capture/segment screens when their segment is done."""
+        ctx = self.context
+        ctx.segment_index += 1
+        if ctx.segment_index < len(ctx.segments()):
+            self._enter_segment()
+        else:
+            ctx.end_session()
+            self.switch_screen("start")
+
+    def start_collage_build(self):
+        """Build and save the collage of a finished capture segment in the
+        background. A later print segment waits via context.collage_pending."""
+        photos = list(self.context.captured_photos)
+        if not photos:
+            return
+        self.context.collage_pending = True
+
+        def work():
+            path, error = None, False
+            try:
+                image = self.collage_creator.create(photos, len(photos))
+                path = str(self.storage.save_collage(image))
+            except Exception:
+                logger.exception("Collage-Erstellung fehlgeschlagen")
+                error = True
+            self._collage_built.emit(path, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    @pyqtSlot(object, bool)
+    def _on_collage_built(self, path, error: bool):
+        self.context.collage_pending = False
+        if path:
+            self.context.collage_path = path
+        elif error:
+            self.show_notification(
+                "Collage konnte nicht erstellt werden – Details in fotobox.log.",
+                duration=8.0, level="error")
 
     # ------------------------------------------------------------------
     # Qt events

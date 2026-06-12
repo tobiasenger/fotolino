@@ -38,7 +38,10 @@ def _default_settings() -> dict:
             "pin_led_ready": 23,
         },
         "gallery": {
+            "enabled": True,
             "background": "",
+            "menu_overlay": "",
+            "browse_overlay": "",
             "print_background": "",
             "print_overlay": "",
         },
@@ -324,6 +327,10 @@ class ConfigManager:
 
     def gallery_background(self, key: str = "background") -> str:
         return self.settings.get("gallery", {}).get(key, "")
+
+    def gallery_enabled(self) -> bool:
+        """False = the gallery (and its button) is switched off entirely."""
+        return bool(self.settings.get("gallery", {}).get("enabled", True))
 
     # ------------------------------------------------------------------
     # Smile overlays (capture screen)

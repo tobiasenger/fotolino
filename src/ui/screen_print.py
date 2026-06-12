@@ -9,16 +9,12 @@ elapsed.
 from __future__ import annotations
 
 import logging
-import threading
 import time
-from pathlib import Path
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QPainter, QPixmap
-from PyQt6.QtWidgets import QProgressBar
 
 from ..constants import MEDIA_PANEL_RECT, SCENE_DURATION_DEFAULTS
-from . import theme
 from .base_screen import BaseScreen
 
 logger = logging.getLogger(__name__)
@@ -37,9 +33,7 @@ class PrintScreen(BaseScreen):
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._tick)
 
-        self._progress = QProgressBar(self)
-        self._progress.setRange(0, 100)
-        self._progress.setTextVisible(False)
+        self._progress = self._make_progress_bar()
 
     # ------------------------------------------------------------------
 
@@ -61,12 +55,7 @@ class PrintScreen(BaseScreen):
         self._apply_screen_overlay("print")
         self._start_scene_music(self._scene)
 
-        self._progress.setStyleSheet(theme.progress_bar_style(
-            cfg.settings.get("loading_bar_color", "#FF6600")))
-        self._progress.setValue(0)
-        self._position_progress()
-        self._progress.setVisible(cfg.settings.get("progress_bar_enabled", True))
-        self._progress.raise_()
+        self._reset_progress_bar(self._progress)
 
         self._send_print()
         self._start_time = time.monotonic()
@@ -75,9 +64,7 @@ class PrintScreen(BaseScreen):
     def on_exit(self):
         self._timer.stop()
         self.app.audio.stop_music()
-        self.app.context.current_path = None
-        self.app.context.captured_photos = []
-        self.app.context.collage_path = None
+        self.app.context.end_session()
 
     # ------------------------------------------------------------------
 
@@ -88,11 +75,8 @@ class PrintScreen(BaseScreen):
             self.transition_to("start")
 
     def resizeEvent(self, event):
-        self._position_progress()
-        super().resizeEvent(event)
-
-    def _position_progress(self):
         self._position_progress_bar(self._progress)
+        super().resizeEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -125,14 +109,4 @@ class PrintScreen(BaseScreen):
             self.app.show_notification(
                 "Druckfehler: Keine Collage-Datei vorhanden.", level="error")
             return
-
-        def do_print():
-            success = self.app.printer.print_collage(Path(path))
-            if not success and not self.app.printer.is_demo():
-                self.app.show_notification(
-                    "Druck fehlgeschlagen – Details in fotobox.log. "
-                    "Drucker, Papier und CUPS-Status prüfen.",
-                    duration=10.0, level="error",
-                )
-
-        threading.Thread(target=do_print, daemon=True).start()
+        self._print_collage_file(path)

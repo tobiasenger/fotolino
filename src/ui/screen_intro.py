@@ -52,7 +52,7 @@ class IntroScreen(BaseScreen):
         if ctx.capture_count() > 0:
             self.transition_to("capture")
         else:
-            ctx.current_path = None
+            ctx.end_session()
             self.transition_to("start")
 
     def resizeEvent(self, event):
