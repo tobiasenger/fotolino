@@ -10,15 +10,16 @@ Camera Module v2 on Raspberry Pi 4 regardless of initialisation order.
 from __future__ import annotations
 
 import logging
+import random
 import tempfile
 import time
 from enum import Enum, auto
 from pathlib import Path
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter, QPixmap
 
-from ..constants import FONT_HUGE, FONT_LARGE, FONT_SMALL
+from ..constants import FONT_HUGE, FONT_SMALL, SCREEN_H, SCREEN_W
 from .base_screen import BaseScreen
 from .widgets import draw_shadow_text
 
@@ -43,6 +44,8 @@ class CaptureScreen(BaseScreen):
         self._timing: dict = {}
         self._countdown_value: int | None = None
         self._preview_pixmap: QPixmap | None = None
+        self._smile_pixmaps: list[QPixmap] = []
+        self._smile_current: QPixmap | None = None   # pre-scaled to widget size
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -54,6 +57,10 @@ class CaptureScreen(BaseScreen):
         self._total_photos = self.app.context.capture_count()
         self._photo_idx = 0
         self._timing = self.app.config.settings.get("capture_timing", {})
+        self._smile_pixmaps = [
+            pix for f in self.app.config.smile_overlay_files()
+            if (pix := self._load_pixmap(f)) is not None
+        ]
         self._set_phase(_Phase.PREVIEW)
 
         self.app.gpio.set_flash_led(True)
@@ -79,6 +86,8 @@ class CaptureScreen(BaseScreen):
         self._phase_start = time.monotonic()
         if phase == _Phase.COUNTDOWN:
             self._countdown_value = None
+        elif phase == _Phase.SMILE:
+            self._pick_smile_overlay()
 
     def _elapsed(self) -> float:
         return time.monotonic() - self._phase_start
@@ -158,8 +167,10 @@ class CaptureScreen(BaseScreen):
             self._draw_centered(painter, w, cy, FONT_HUGE, (255, 255, 255),
                                 str(self._countdown_value or 1))
         elif self._phase == _Phase.SMILE:
-            text = self._timing.get("smile_text", "Lächeln!")
-            self._draw_centered(painter, w, cy, FONT_LARGE, (255, 230, 0), text)
+            if self._smile_current:
+                painter.drawPixmap((w - self._smile_current.width()) // 2,
+                                   cy - self._smile_current.height() // 2,
+                                   self._smile_current)
         elif self._phase == _Phase.POST:
             self._draw_centered(painter, w, h - 80, FONT_SMALL, (200, 255, 200),
                                 f"Foto {self._photo_idx + 1} von {self._total_photos} aufgenommen")
@@ -168,6 +179,21 @@ class CaptureScreen(BaseScreen):
     def _draw_centered(painter, w, y_center, size, color, text):
         draw_shadow_text(painter, 0, y_center - size - 10, w, size * 2 + 20,
                          text, size, color)
+
+    def _pick_smile_overlay(self):
+        """Randomly choose one of the enabled smile PNGs for this photo and
+        pre-scale it once (smooth scaling per paint tick is too slow on the
+        Pi). PNG pixels are treated as 1920x1080 design coordinates."""
+        if not self._smile_pixmaps:
+            self._smile_current = None
+            return
+        pix = random.choice(self._smile_pixmaps)
+        factor = min(self.width() / SCREEN_W, self.height() / SCREEN_H)
+        self._smile_current = pix.scaled(
+            max(1, round(pix.width() * factor)),
+            max(1, round(pix.height() * factor)),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
 
     # ------------------------------------------------------------------
 

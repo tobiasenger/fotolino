@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from .constants import COLLAGE_LAYOUTS
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,6 +76,50 @@ class StorageManager:
                 f"Collage konnte nicht gespeichert werden ({dest}): {e}."
             ) from e
         return dest
+
+    # ------------------------------------------------------------------
+    # Gallery (files of the most recent session)
+    # ------------------------------------------------------------------
+
+    def last_session_photos(self) -> list[Path]:
+        """Photos of the most recent session, in capture order.
+
+        Photo filenames end in the zero-based capture index
+        (foto_<ts>_00.jpg, _01, …), which restarts at 00 every session:
+        walking newest-first, the session ends at the first file with
+        index 00. Capped at the largest collage layout as a guard against
+        foreign file names.
+        """
+        session: list[Path] = []
+        for p in self._list_images("Fotos"):
+            session.append(p)
+            if p.stem.endswith("_00") or len(session) >= max(COLLAGE_LAYOUTS):
+                break
+        return session[::-1]
+
+    def last_session_collage(self) -> list[Path]:
+        """The most recently saved collage (one session = one collage)."""
+        return self._list_images("Collagen")[:1]
+
+    def _list_images(self, subdir: str) -> list[Path]:
+        """All images in the USB folder, newest first; [] if the stick is missing."""
+        base = self._cfg.usb_path(subdir)
+        try:
+            files = [p for p in base.iterdir()
+                     if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+        except OSError:
+            logger.info("Galerie: Ordner '%s' nicht lesbar oder USB-Stick fehlt.", base)
+            return []
+
+        def mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        # Name as tie-breaker: equal mtimes keep …_02 after …_01.
+        files.sort(key=lambda p: (mtime(p), p.name), reverse=True)
+        return files
 
     # ------------------------------------------------------------------
     # USB health check

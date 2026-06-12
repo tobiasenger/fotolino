@@ -286,7 +286,7 @@ Das Admin-Menü ist in drei Sub-Views gegliedert, die über eine Navigationsleis
 ### 4.3 Allgemeine Einstellungen (`admin_settings.py`)
 
 - **Collage-Overlays:** Je ein Datei-Upload-Feld für `cover_1.png` bis `cover_4.png` (PNG mit Transparenz). Beim Upload wird zwingend geprüft, ob die Bildgröße exakt **1800×1200 px** beträgt – andernfalls erscheint eine Fehlermeldung und die Datei wird abgelehnt. Ungültige Dateien dürfen nicht gespeichert werden.
-- **Startscreen-Hintergrund:** Auswahl zwischen Bild (`.jpg`, `.png`) oder Video-Loop (`.mp4`). Dateiauswahl per Upload-Button.
+- **Startscreen-Hintergrund:** Hintergrundbild (`.jpg`, `.png`). Dateiauswahl per Upload-Button. (Video-Hintergründe werden nicht unterstützt: das VLC-Videofenster würde das Overlay verdecken und der Stumm-Modus des Videos legt über PulseAudio alle anderen App-Sounds lahm.)
 - **Ladebalken-Farbe:** Farbwähler (Hex-Wert) für die Ladebalkenfüllung auf dem Collage- und Druck-Screen.
 - **Blitz-LED:** Toggle-Schalter (Ein/Aus) – deaktiviert die Flash-LED global, auch wenn GPIO angeschlossen ist.
 - **GPIO-Pins:** Eingabefelder für alle vier GPIO-Pin-Nummern (Start-Button, Admin-Button, Flash-LED, Ready-LED), damit das Layout ohne Code-Änderung angepasst werden kann.

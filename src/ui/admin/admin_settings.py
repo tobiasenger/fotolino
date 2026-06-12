@@ -26,8 +26,6 @@ from ...constants import COLLAGE_H, COLLAGE_W, SCENE_DURATION_RANGES
 from ..widgets import FileSelectRow, add_form_section, make_hint, set_kind
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
-_VIDEO_EXTS = {".mp4", ".avi", ".mov"}
-_BG_EXTS = _IMAGE_EXTS | _VIDEO_EXTS
 _PNG_EXTS = {".png"}
 _OVERLAY_EXTS = {".png", ".gif"}
 _WAV_EXTS = {".wav"}
@@ -130,17 +128,13 @@ class AdminSettings(QWidget):
         f = self._scroll_form()
         add_form_section(f, "Startbildschirm", first=True)
         bg = cfg.get("idle_background", {})
-        self._combo("bg_type", [("Bild", "image"), ("Video", "video")],
-                    bg.get("type", "image"), f, "Hintergrundtyp:")
         self._file_row("bg_file", bg.get("file", ""), f,
-                       "Hintergrunddatei:", _BG_EXTS, "Hintergrund")
+                       "Hintergrundbild:", _IMAGE_EXTS, "Hintergrund")
 
         add_form_section(f, "Overlays")
         f.addRow(make_hint(
             "PNG mit Transparenz oder animiertes GIF – liegt als oberste Ebene "
-            "über Hintergrund und Diashow/Collage (empfohlen: 1920×1080 px). "
-            "Hinweis: Beim Video-Hintergrund des Startbildschirms wird das "
-            "Overlay nicht angezeigt."))
+            "über Hintergrund und Diashow/Collage (empfohlen: 1920×1080 px)."))
         overlays = cfg.get("screen_overlays", {})
         for key, label in _OVERLAY_SCREENS:
             ov = overlays.get(key, {})
@@ -148,6 +142,18 @@ class AdminSettings(QWidget):
                            f"{label}:", _OVERLAY_EXTS, "Overlay")
             self._combo(f"overlay_{key}_enabled", [("Ja", True), ("Nein", False)],
                         ov.get("enabled", True), f, "Anzeigen:")
+
+        add_form_section(f, "Galerie")
+        f.addRow(make_hint(
+            "Galerie-Modus (dritter Button bzw. Taste L): die Fotos und die "
+            "Collage der letzten Sitzung ansehen und nachdrucken."))
+        gal = cfg.get("gallery", {})
+        self._file_row("gallery_bg", gal.get("background", ""), f,
+                       "Hintergrundbild:", _IMAGE_EXTS, "Hintergrund")
+        self._file_row("gallery_print_bg", gal.get("print_background", ""), f,
+                       "Hintergrund Druckansicht:", _IMAGE_EXTS, "Hintergrund")
+        self._file_row("gallery_print_overlay", gal.get("print_overlay", ""), f,
+                       "Overlay Druckansicht (PNG):", _PNG_EXTS, "Overlay")
 
         add_form_section(f, "Ladebalken")
         self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"), f,
@@ -172,8 +178,18 @@ class AdminSettings(QWidget):
         add_form_section(f, "Lächeln-Hinweis")
         self._combo("smile_enabled", [("Ja", True), ("Nein", False)],
                     timing.get("smile_enabled", True), f, "Aktiv:")
-        self._entry("smile_text", timing.get("smile_text", "Lächeln!"), f, "Text:")
         self._entry("t_smile", timing.get("smile_duration", 0.8), f, "Dauer (s):")
+        f.addRow(make_hint(
+            "Bis zu 5 PNG-Overlays (mit Transparenz) – vor jedem Foto wird "
+            "zufällig eines der aktivierten mittig angezeigt "
+            "(Bezugsgröße: 1920×1080 px)."))
+        smiles = cfg.get("smile_overlays", {})
+        for n in range(1, 6):
+            ov = smiles.get(str(n), {})
+            self._file_row(f"smile_{n}_file", ov.get("file", ""), f,
+                           f"Overlay {n}:", _PNG_EXTS, "Overlay")
+            self._combo(f"smile_{n}_enabled", [("Ja", True), ("Nein", False)],
+                        ov.get("enabled", True), f, "Anzeigen:")
 
         add_form_section(f, "Töne")
         sounds = cfg.get("system_sounds", {})
@@ -248,6 +264,8 @@ class AdminSettings(QWidget):
                     "Start-Button:")
         self._entry("gpio_pin_admin_button", pins.get("pin_admin_button", 27), f,
                     "Admin-Button:")
+        self._entry("gpio_pin_gallery_button", pins.get("pin_gallery_button", 24), f,
+                    "Galerie-Button:")
         self._entry("gpio_pin_led_flash", pins.get("pin_led_flash", 22), f,
                     "Flash-LED:")
         self._entry("gpio_pin_led_ready", pins.get("pin_led_ready", 23), f,
@@ -308,7 +326,7 @@ class AdminSettings(QWidget):
         cfg = self.app.config.settings
 
         bg = cfg.setdefault("idle_background", {})
-        bg["type"] = self._get("bg_type") or "image"
+        bg["type"] = "image"   # video backgrounds are no longer supported
         bg["file"] = self._get("bg_file") or ""
 
         overlays = cfg.setdefault("screen_overlays", {})
@@ -330,8 +348,14 @@ class AdminSettings(QWidget):
         timing["initial_preview_seconds"] = self._get("t_preview", float) or 2.0
         timing["countdown_from"] = self._get("t_countdown", int) or 3
         timing["smile_enabled"] = bool(self._get("smile_enabled"))
-        timing["smile_text"] = self._get("smile_text") or "Lächeln!"
         timing["smile_duration"] = self._get("t_smile", float) or 0.8
+        timing.pop("smile_text", None)   # replaced by smile_overlays
+
+        smiles = cfg.setdefault("smile_overlays", {})
+        for n in range(1, 6):
+            ov = smiles.setdefault(str(n), {})
+            ov["file"] = self._get(f"smile_{n}_file") or ""
+            ov["enabled"] = bool(self._get(f"smile_{n}_enabled"))
         timing["post_photo_pause"] = self._get("t_post", float) or 2.0
         timing["flash_duration"] = self._get("t_flash", float) or 0.15
         cfg["flash_enabled"] = bool(self._get("flash_enabled"))
@@ -347,8 +371,16 @@ class AdminSettings(QWidget):
         if sh:
             cfg["screen_height"] = sh
 
+        gal = cfg.setdefault("gallery", {})
+        gal["background"] = self._get("gallery_bg") or ""
+        gal["print_background"] = self._get("gallery_print_bg") or ""
+        gal["print_overlay"] = self._get("gallery_print_overlay") or ""
+        gal.pop("photo_count", None)     # removed settings from older versions
+        gal.pop("collage_count", None)
+
         pins = cfg.setdefault("gpio", {})
-        for key in ("pin_start_button", "pin_admin_button", "pin_led_flash", "pin_led_ready"):
+        for key in ("pin_start_button", "pin_admin_button", "pin_gallery_button",
+                    "pin_led_flash", "pin_led_ready"):
             val = self._get(f"gpio_{key}", int)
             if val is not None:
                 pins[key] = val

@@ -41,6 +41,12 @@ class BaseScreen(QWidget):
     def on_exit(self):
         pass
 
+    def handle_button(self, action: str) -> bool:
+        """Screen-local button handling (GPIO action name). The app offers
+        every button press to the active screen first; return True to consume
+        it, False to fall through to the global handling in FotoboxApp."""
+        return False
+
     # ------------------------------------------------------------------
     # Navigation / scene helpers
     # ------------------------------------------------------------------

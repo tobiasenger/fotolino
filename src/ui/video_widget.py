@@ -53,7 +53,7 @@ class VlcVideoFrame(QFrame):
         self.hide()
         self._player = None
 
-    def play(self, path, loop: bool = False, muted: bool = False) -> bool:
+    def play(self, path, loop: bool = False) -> bool:
         self.stop()
         inst = _get_video_instance()
         if inst is None:
@@ -67,8 +67,10 @@ class VlcVideoFrame(QFrame):
             self._player = inst.media_player_new()
             self._player.set_media(media)
             media.release()
-            if muted:
-                self._player.audio_set_mute(True)
+            # Never mute: PulseAudio/PipeWire remembers mute per application
+            # stream key, so a muted VLC stream silences ALL later VLC audio
+            # (SFX, scene music). Explicit unmute also heals that stored state.
+            self._player.audio_set_mute(False)
             self.show()
             # The native window id is only usable once the frame is realised.
             QTimer.singleShot(200, self._attach_and_play)

@@ -7,7 +7,7 @@ try:
     _GPIO_AVAILABLE = True
 except ImportError:
     _GPIO_AVAILABLE = False
-    logger.info("gpiozero nicht verfügbar – Tastatur-Fallback aktiv (LEERTASTE / F1)")
+    logger.info("gpiozero nicht verfügbar – Tastatur-Fallback aktiv (LEERTASTE / F1 / L)")
 
 
 class _MockLED:
@@ -30,20 +30,23 @@ class GPIOHandler:
         self._flash_enabled = config_manager.settings.get("flash_enabled", True)
         self._start_btn = None
         self._admin_btn = None
+        self._gallery_btn = None
 
         if _GPIO_AVAILABLE:
             try:
                 self._start_btn  = Button(pins["pin_start_button"], pull_up=True, bounce_time=0.1)
                 self._admin_btn  = Button(pins["pin_admin_button"],  pull_up=True, bounce_time=0.1)
+                self._gallery_btn = Button(pins["pin_gallery_button"], pull_up=True, bounce_time=0.1)
                 self._led_flash  = LED(pins["pin_led_flash"])
                 self._led_ready  = LED(pins["pin_led_ready"])
                 self._start_btn.when_pressed = lambda: self._fire("start_button")
                 self._admin_btn.when_pressed = lambda: self._fire("admin_button")
+                self._gallery_btn.when_pressed = lambda: self._fire("gallery_button")
                 logger.info("GPIO initialisiert: Pins %s", pins)
             except Exception as e:
                 logger.warning(
                     "GPIO-Initialisierung fehlgeschlagen (%s) – Tastatur-Fallback "
-                    "aktiv (LEERTASTE / F1). Pin-Belegung in settings.json und "
+                    "aktiv (LEERTASTE / F1 / L). Pin-Belegung in settings.json und "
                     "Verkabelung (WIRING.md) prüfen.", e)
                 self._led_flash = _MockLED()
                 self._led_ready = _MockLED()
@@ -77,7 +80,8 @@ class GPIOHandler:
     def cleanup(self):
         self.set_flash_led(False)
         self.set_ready_led(False)
-        for dev in (self._start_btn, self._admin_btn, self._led_flash, self._led_ready):
+        for dev in (self._start_btn, self._admin_btn, self._gallery_btn,
+                    self._led_flash, self._led_ready):
             close = getattr(dev, "close", None)
             if close:
                 try:

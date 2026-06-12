@@ -24,6 +24,9 @@ from src.ui.admin.admin_main import AdminMain
 from src.ui.screen_camera_test import CameraTestScreen
 from src.ui.screen_capture import CaptureScreen
 from src.ui.screen_collage import CollageScreen
+from src.ui.screen_gallery import (
+    GalleryBrowseScreen, GalleryMenuScreen, GalleryPrintScreen,
+)
 from src.ui.screen_intro import IntroScreen
 from src.ui.screen_print import PrintScreen
 from src.ui.screen_start import StartScreen
@@ -38,6 +41,9 @@ _SCREEN_DEFS = (
     ("capture", CaptureScreen, AppState.CAPTURE),
     ("collage", CollageScreen, AppState.COLLAGE),
     ("print", PrintScreen, AppState.PRINT),
+    ("gallery_menu", GalleryMenuScreen, AppState.GALLERY),
+    ("gallery_browse", GalleryBrowseScreen, AppState.GALLERY),
+    ("gallery_print", GalleryPrintScreen, AppState.GALLERY),
     ("camera_test", CameraTestScreen, AppState.ADMIN),
     ("admin", AdminMain, AppState.ADMIN),
 )
@@ -155,9 +161,16 @@ class FotoboxApp(QMainWindow):
 
     @pyqtSlot(str)
     def _handle_button(self, action: str):
+        # The active screen gets first pick (gallery navigation etc.).
+        current = self.screens.get(self._current_name)
+        if current and current.handle_button(action):
+            return
         if action == "start_button":
             if self.context.state == AppState.READY:
                 self._start_session()
+        elif action == "gallery_button":
+            if self.context.state == AppState.READY:
+                self.switch_screen("gallery_menu")
         elif action == "admin_button":
             if self.context.state == AppState.ADMIN:
                 self.context.exit_admin()
@@ -208,6 +221,8 @@ class FotoboxApp(QMainWindow):
             self._gpio_button.emit("start_button")
         elif event.key() == Qt.Key.Key_F1:
             self._gpio_button.emit("admin_button")
+        elif event.key() == Qt.Key.Key_L:
+            self._gpio_button.emit("gallery_button")
         else:
             super().keyPressEvent(event)
 

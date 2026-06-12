@@ -33,8 +33,14 @@ def _default_settings() -> dict:
         "gpio": {
             "pin_start_button": 17,
             "pin_admin_button": 27,
+            "pin_gallery_button": 24,
             "pin_led_flash": 22,
             "pin_led_ready": 23,
+        },
+        "gallery": {
+            "background": "",
+            "print_background": "",
+            "print_overlay": "",
         },
         "collage_covers": {"1": "", "2": "", "3": "", "4": ""},
         "idle_background": {"type": "image", "file": ""},
@@ -59,10 +65,12 @@ def _default_settings() -> dict:
             "initial_preview_seconds": 2.0,
             "countdown_from": 3,
             "smile_duration": 0.8,
-            "smile_text": "Lächeln!",
             "smile_enabled": True,
             "post_photo_pause": 2.0,
             "flash_duration": 0.15,
+        },
+        "smile_overlays": {
+            str(n): {"file": "", "enabled": True} for n in range(1, 6)
         },
         "scene_durations": dict(SCENE_DURATION_DEFAULTS),
         "demo_mode": False,
@@ -309,6 +317,24 @@ class ConfigManager:
             if not ok:
                 bad.append(s.get("name") or s.get("id", "?"))
         return bad
+
+    # ------------------------------------------------------------------
+    # Gallery
+    # ------------------------------------------------------------------
+
+    def gallery_background(self, key: str = "background") -> str:
+        return self.settings.get("gallery", {}).get(key, "")
+
+    # ------------------------------------------------------------------
+    # Smile overlays (capture screen)
+    # ------------------------------------------------------------------
+
+    def smile_overlay_files(self) -> list[str]:
+        """Files of all enabled, non-empty smile overlay slots (1–5)."""
+        slots = self.settings.get("smile_overlays", {})
+        return [ov["file"] for n in range(1, 6)
+                if (ov := slots.get(str(n), {})).get("file")
+                and ov.get("enabled", True)]
 
     # ------------------------------------------------------------------
     # Settings helpers

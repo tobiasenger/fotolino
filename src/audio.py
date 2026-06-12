@@ -166,6 +166,10 @@ class AudioPlayer:
             self._music_player.set_media(media)
             media.release()
             self._music_player.audio_set_volume(100)
+            # PulseAudio/PipeWire restores a remembered mute per application
+            # stream key – unmute explicitly so a previously muted VLC stream
+            # (e.g. from an old version's muted video) cannot silence music.
+            self._music_player.audio_set_mute(False)
             if self._music_player.play() == -1:
                 logger.warning("VLC verweigert die Wiedergabe von: %s", p)
             else:
@@ -244,6 +248,7 @@ class AudioPlayer:
             player.set_media(media)
             media.release()
             player.audio_set_volume(100)
+            player.audio_set_mute(False)   # see play_music: undo restored mute
             if player.play() == -1:
                 player.release()
                 logger.warning("VLC verweigert die Wiedergabe des Sound-Effekts: %s", p)

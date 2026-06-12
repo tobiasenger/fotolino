@@ -9,6 +9,7 @@ class AppState(Enum):
     CAPTURE = "capture"
     COLLAGE = "collage"
     PRINT   = "print"
+    GALLERY = "gallery"
     ADMIN   = "admin"
 
 

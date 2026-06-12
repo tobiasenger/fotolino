@@ -31,6 +31,41 @@ Auf dem Mac (Entwicklung):
 """
 
 
+# ANSI-Shadow-Lettern für das Bootlogo; pro Buchstabe 6 gleich breite Zeilen.
+_LOGO_LETTERS = {
+    "K": ("██╗  ██╗",
+          "██║ ██╔╝",
+          "█████╔╝ ",
+          "██╔═██╗ ",
+          "██║  ██╗",
+          "╚═╝  ╚═╝"),
+    "I": ("██╗",
+          "██║",
+          "██║",
+          "██║",
+          "██║",
+          "╚═╝"),
+    "W": ("██╗    ██╗",
+          "██║    ██║",
+          "██║ █╗ ██║",
+          "██║███╗██║",
+          "╚███╔███╔╝",
+          " ╚══╝╚══╝ "),
+}
+
+
+def _print_boot_logo():
+    """Print the framed KIWI boot logo to the console."""
+    rows = ["  ".join(parts)
+            for parts in zip(*(_LOGO_LETTERS[c] for c in "KIWI"))]
+    inner = max(len(r) for r in rows) + 8
+    lines = ["", *rows, "", "·  F O T O B O X  ·", ""]
+    print("\n╔" + "═" * inner + "╗")
+    for line in lines:
+        print("║" + line.center(inner) + "║")
+    print("╚" + "═" * inner + "╝\n")
+
+
 def _configure_logging(debug: bool = False):
     from src.config_manager import BASE_DIR
     logging.basicConfig(
@@ -55,6 +90,7 @@ def main():
                         help="Verbose logging (DEBUG level) to console and fotobox.log")
     args = parser.parse_args()
 
+    _print_boot_logo()
     _configure_logging(debug=args.debug)
 
     try:

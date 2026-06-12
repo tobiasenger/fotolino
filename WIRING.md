@@ -30,7 +30,7 @@ Pins used by the fotobox are marked with ◄.
   ◄ Start button GPIO17 11│ ● ○ │12 GPIO18  │
   ◄ Admin button GPIO27 13│ ● ○ │14 GND     │
   ◄ Flash LED   GPIO22 15│ ● ● │16 GPIO23 ► │ Ready LED
-                3.3V  17│ ● ○ │18 GPIO24    │
+                3.3V  17│ ● ● │18 GPIO24 ► │ Gallery button
                GPIO10 19│ ● ○ │20 GND       │
                 GPIO9 21│ ● ○ │22 GPIO25    │
                GPIO11 23│ ● ○ │24 GPIO8     │
@@ -52,6 +52,7 @@ Pins used by the fotobox are marked with ◄.
 | Pin 13 | GPIO 27 | Admin button circuit |
 | Pin 15 | GPIO 22 | Flash LED circuit |
 | Pin 16 | GPIO 23 | Ready LED circuit |
+| Pin 18 | GPIO 24 | Gallery button circuit |
 
 ---
 
@@ -249,12 +250,30 @@ These values live in `config/settings.json` and can be changed in the admin menu
 
 ```json
 "gpio": {
-    "pin_start_button": 17,
-    "pin_admin_button": 27,
-    "pin_led_flash":    22,
-    "pin_led_ready":    23
+    "pin_start_button":   17,
+    "pin_admin_button":   27,
+    "pin_gallery_button": 24,
+    "pin_led_flash":      22,
+    "pin_led_ready":      23
 }
 ```
+
+---
+
+## Gallery button (GPIO 24)
+
+The third button switches the fotobox into gallery mode (browse and re-print
+the latest photos/collages). Its circuit is **identical to the Start/Admin
+buttons** (2 × 10 kΩ, internal pull-up):
+
+```
+Pi Pin 18 (GPIO 24) ──[10 kΩ R1]──[BUTTON]──[10 kΩ R2]── GND (X− rail)
+```
+
+Place it on free breadboard rows below the existing components (the
+right-side rows 13–20 columns F–J are taken by the LEDs — use the free
+left-side rows or a row ≥ 22 on larger boards). Until the button is wired,
+the same function is available on the keyboard via the **L** key.
 
 ---
 
