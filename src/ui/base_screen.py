@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtCore import Qt, QRect
-from PyQt6.QtGui import QColor, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QMovie, QPainter, QPixmap
 from PyQt6.QtWidgets import QWidget
 
 from ..constants import COLOR_BG, PROGRESS_BAR_H, SCREEN_H, SCREEN_W
@@ -27,6 +27,9 @@ class BaseScreen(QWidget):
         self.app = app
         self._bg_pixmap: QPixmap | None = None
         self._bg_scaled: QPixmap | None = None   # cache, invalidated on resize
+        self._overlay_pixmap: QPixmap | None = None
+        self._overlay_scaled: QPixmap | None = None
+        self._overlay_movie: QMovie | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle hooks (override in subclasses)
@@ -99,6 +102,68 @@ class BaseScreen(QWidget):
                            (self.height() - self._bg_scaled.height()) // 2,
                            self._bg_scaled)
 
+    # ------------------------------------------------------------------
+    # Overlay helpers (topmost layer above background and media)
+    # ------------------------------------------------------------------
+
+    def _apply_screen_overlay(self, screen_key: str):
+        """Load the admin-configured overlay (PNG/GIF) for this screen."""
+        ov = self.app.config.settings.get("screen_overlays", {}).get(screen_key, {})
+        if ov.get("enabled", True):
+            self._set_overlay(ov.get("file", ""))
+        else:
+            self._set_overlay(None)
+
+    def _set_overlay(self, path: str | None):
+        if self._overlay_movie is not None:
+            self._overlay_movie.stop()
+            self._overlay_movie.deleteLater()
+            self._overlay_movie = None
+        self._overlay_pixmap = None
+        self._overlay_scaled = None
+        if not path:
+            return
+        p = self.app.config.resolve_asset(path)
+        if p.suffix.lower() == ".gif" and p.exists():
+            movie = QMovie(str(p))
+            # frameCount() is 1 for static GIFs (0 = unknown, assume animated)
+            if movie.isValid() and movie.frameCount() != 1:
+                self._overlay_movie = movie
+                movie.frameChanged.connect(lambda _frame: self.update())
+                self._scale_overlay_movie()
+                movie.start()
+                return
+            movie.deleteLater()   # static or broken GIF: load as plain image
+        self._overlay_pixmap = self._load_pixmap(path)
+
+    def _scale_overlay_movie(self):
+        """Cover-scale the GIF: QMovie then decodes frames pre-scaled."""
+        movie = self._overlay_movie
+        if movie is None:
+            return
+        movie.jumpToFrame(0)
+        size = movie.currentImage().size()
+        if not size.isEmpty():
+            movie.setScaledSize(size.scaled(
+                self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding))
+
+    def _paint_overlay(self, painter: QPainter):
+        """Paint the overlay centre-cropped over everything painted so far."""
+        if self._overlay_movie is not None:
+            pix = self._overlay_movie.currentPixmap()
+        elif self._overlay_pixmap is not None:
+            if self._overlay_scaled is None:
+                self._overlay_scaled = self._overlay_pixmap.scaled(
+                    self.width(), self.height(),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation)
+            pix = self._overlay_scaled
+        else:
+            return
+        if not pix.isNull():
+            painter.drawPixmap((self.width() - pix.width()) // 2,
+                               (self.height() - pix.height()) // 2, pix)
+
     def _draw_cover(self, painter: QPainter, pixmap: QPixmap, fast: bool = False):
         """Draw a pixmap covering the whole screen (centre-cropped).
 
@@ -142,4 +207,18 @@ class BaseScreen(QWidget):
 
     def resizeEvent(self, event):
         self._bg_scaled = None
+        self._overlay_scaled = None
+        self._scale_overlay_movie()
         super().resizeEvent(event)
+
+    def hideEvent(self, event):
+        """Pause GIF decoding while the screen is not on the stack top."""
+        if self._overlay_movie is not None:
+            self._overlay_movie.setPaused(True)
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        if (self._overlay_movie is not None
+                and self._overlay_movie.state() == QMovie.MovieState.Paused):
+            self._overlay_movie.setPaused(False)
+        super().showEvent(event)

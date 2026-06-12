@@ -29,7 +29,14 @@ _IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 _VIDEO_EXTS = {".mp4", ".avi", ".mov"}
 _BG_EXTS = _IMAGE_EXTS | _VIDEO_EXTS
 _PNG_EXTS = {".png"}
+_OVERLAY_EXTS = {".png", ".gif"}
 _WAV_EXTS = {".wav"}
+
+_OVERLAY_SCREENS = [
+    ("start", "Startbildschirm"),
+    ("collage", "Collage-Bildschirm"),
+    ("print", "Druck-Bildschirm"),
+]
 
 _TABS = ["Darstellung", "Aufnahme", "Zeiten", "Collage", "Gerät", "Sicherung"]
 
@@ -127,6 +134,20 @@ class AdminSettings(QWidget):
                     bg.get("type", "image"), f, "Hintergrundtyp:")
         self._file_row("bg_file", bg.get("file", ""), f,
                        "Hintergrunddatei:", _BG_EXTS, "Hintergrund")
+
+        add_form_section(f, "Overlays")
+        f.addRow(make_hint(
+            "PNG mit Transparenz oder animiertes GIF – liegt als oberste Ebene "
+            "über Hintergrund und Diashow/Collage (empfohlen: 1920×1080 px). "
+            "Hinweis: Beim Video-Hintergrund des Startbildschirms wird das "
+            "Overlay nicht angezeigt."))
+        overlays = cfg.get("screen_overlays", {})
+        for key, label in _OVERLAY_SCREENS:
+            ov = overlays.get(key, {})
+            self._file_row(f"overlay_{key}_file", ov.get("file", ""), f,
+                           f"{label}:", _OVERLAY_EXTS, "Overlay")
+            self._combo(f"overlay_{key}_enabled", [("Ja", True), ("Nein", False)],
+                        ov.get("enabled", True), f, "Anzeigen:")
 
         add_form_section(f, "Ladebalken")
         self._entry("loading_bar_color", cfg.get("loading_bar_color", "#FF6600"), f,
@@ -289,6 +310,12 @@ class AdminSettings(QWidget):
         bg = cfg.setdefault("idle_background", {})
         bg["type"] = self._get("bg_type") or "image"
         bg["file"] = self._get("bg_file") or ""
+
+        overlays = cfg.setdefault("screen_overlays", {})
+        for key, _label in _OVERLAY_SCREENS:
+            ov = overlays.setdefault(key, {})
+            ov["file"] = self._get(f"overlay_{key}_file") or ""
+            ov["enabled"] = bool(self._get(f"overlay_{key}_enabled"))
 
         covers = cfg.setdefault("collage_covers", {})
         for n in range(1, 5):

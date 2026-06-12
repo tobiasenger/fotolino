@@ -27,7 +27,8 @@
       "Read(//tmp/**)",
       "Bash(python3 -m py_compile src/main.py src/app.py src/audio.py src/camera.py src/collage.py src/config_manager.py src/gpio_handler.py src/printer.py src/storage.py src/state.py src/constants.py src/ui/*.py src/ui/admin/*.py)",
       "Bash(python3 src/main.py --help)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m py_compile src/constants.py src/config_manager.py src/ui/base_screen.py src/ui/theme.py src/ui/screen_start.py src/ui/screen_collage.py src/ui/screen_print.py src/ui/admin/admin_settings.py)"
     ]
   }
 }

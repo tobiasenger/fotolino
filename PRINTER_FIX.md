@@ -115,7 +115,9 @@ sudo cupsaccept SELPHY
 
 ```bash
 lpstat -t          # Warteschlange "im Leerlauf", URI beginnt mit gutenprint53+usb://
-lp -d SELPHY -o PageSize=Postcard -o fit-to-page /usr/share/cups/data/testprint
+# Testdruck bewusst OHNE -o-Optionen – genau wie die Fotobox druckt
+# (Randlosdruck/Papierformat sind Queue-Standards, siehe PRINTER_SETUP.md):
+lp -d SELPHY /usr/share/cups/data/testprint
 ```
 
 Der Druck muss jetzt **ohne Aus-/Einschalten** starten, und der Drucker

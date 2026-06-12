@@ -393,9 +393,15 @@ sudo usermod -aG gpio admin
 
 ### 5.6 Drucker einrichten (Canon SELPHY CP1500)
 
+> **Maßgebliche, getestete Anleitung: `PRINTER_SETUP.md`.** Die dort
+> beschriebene Konfiguration (Gutenprint 5.3.5 aus den Quellen,
+> `gutenprint53+usb://`-Backend, Randlosdruck als Queue-Standard, App
+> druckt ohne Job-Optionen) ist die bekannt-gute Referenz für den CP1500
+> per USB auf Trixie. Hier nur die Kurzfassung.
+
 **CUPS installieren:**
 ```bash
-sudo apt install -y cups cups-client printer-driver-gutenprint
+sudo apt install -y cups cups-client cups-bsd python3-cups
 sudo usermod -aG lpadmin admin
 sudo systemctl enable cups && sudo systemctl start cups
 sudo cupsctl --remote-admin
@@ -403,23 +409,33 @@ sudo cupsctl --remote-admin
 
 CUPS-Webinterface aufrufen (vom Mac im Browser): `http://fotobox.local:631`
 
-**Drucker hinzufügen:**
+**Gutenprint 5.3.5 installieren:** Das Trixie-Paket
+`printer-driver-gutenprint` (5.3.4) kennt den CP1500 **nicht** –
+Gutenprint 5.3.5 muss aus den Quellen gebaut werden
+(`PRINTER_SETUP.md`, Abschnitt 3).
+
+**Drucker hinzufügen (USB – die getestete Verbindung):**
 ```bash
-# USB:
-lpadmin -p SELPHY -E -v usb://Canon/CP1500 -m gutenprint.5.3://canon-cp1500/expert
-# WLAN:
-lpadmin -p SELPHY -E -v ipp://DRUCKER-IP/ipp/print -m gutenprint.5.3://canon-cp1500/expert
+# Geräte-URI ermitteln – die Zeile mit gutenprint53+usb:// verwenden!
+# (Mit der usb://Canon/...-URI bleiben Aufträge hängen.)
+lpinfo -v | grep -i selphy
+
+sudo lpadmin -p SELPHY -E \
+  -v "gutenprint53+usb://canon-selphy-cp1500/DEINE-SERIENNUMMER" \
+  -m "gutenprint.5.3://canon-cp1500/expert"
+
+# Randlosdruck als Queue-Standard – die App übergibt KEINE Druckoptionen:
+sudo lpadmin -p SELPHY -o StpBorderless=True
+sudo lpadmin -p SELPHY -o media-default=Postcard
 ```
 
-**Testdruck:**
+**Testdruck** (ohne `-o`-Optionen, genau wie die Fotobox druckt):
 ```bash
 lp -d SELPHY /usr/share/cups/data/testprint
 ```
 
-**Python-Integration:**
-```bash
-pip3 install --break-system-packages pycups
-```
+**Python-Integration:** `python3-cups` (pycups) ist oben bereits per apt
+installiert – kein pip nötig.
 
 ### 5.7 USB-Stick einrichten
 

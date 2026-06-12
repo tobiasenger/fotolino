@@ -25,24 +25,19 @@ _DEMO_MSG = (
     "╚══════════════════════════════════════════════════════════╝"
 )
 
-# Druckoptionen für den Canon SELPHY CP1500 mit Gutenprint-5.3-PPD
-# (Treiber "gutenprint.5.3://canon-cp1500/expert", siehe PRINTER_SETUP.md).
-# Die Werte stammen aus dem PPD bzw. `lpoptions -p SELPHY -l`:
-#   PageSize ........... Postcard (100×148 mm, KP-108IN-Papier);
-#                        weitere PPD-Werte: w253h337 (L), w155h244 (Karte)
-#   StpBorderless ...... randloser Druck (zieht die Ränder auf 0)
-#   StpiShrinkOutput ... Expand = Bild auf die volle Seite aufziehen
-#   StpImageType ....... Farbabstimmung für Fotos
-#   fit-to-page ........ CUPS-Filter skaliert das JPEG auf die Seitengröße
-# Unbekannte Optionen werden von CUPS ignoriert (z. B. falls die Queue mit
-# dem "simple"-PPD statt "expert" angelegt wurde) – sie schaden also nicht.
-_PRINT_OPTIONS = {
-    "PageSize": "Postcard",
-    "StpBorderless": "True",
-    "StpiShrinkOutput": "Expand",
-    "StpImageType": "Photo",
-    "fit-to-page": "true",
-}
+# Bekannt-gute Druckkonfiguration (Canon SELPHY CP1500, Raspberry Pi OS
+# Trixie, CUPS, Gutenprint 5.3.5, USB): Die App übergibt KEINE Druckoptionen
+# an CUPS. App-seitige Optionen ("media", "fit-to-page", "print-scaling",
+# PPD-Optionen wie "StpBorderless" …) führten beim CP1500 nachweislich zu
+# unzuverlässigem Verhalten – CUPS nahm die Aufträge an, sie blieben aber
+# teils hängen oder druckten nicht korrekt, obwohl Drucker, USB, CUPS,
+# pycups und Gutenprint einwandfrei funktionierten.
+# Randloser Druck wird stattdessen einmalig als Queue-Standard hinterlegt:
+#     sudo lpadmin -p SELPHY -o StpBorderless=True
+# Begründung und Einrichtung: PRINTER_SETUP.md, Abschnitt "Druckoptionen".
+# Diese Konfiguration ist die getestete, stabile Referenz – keine neuen
+# Druck-/Medien-/Skalierungsoptionen einführen, ohne sie gründlich auf dem
+# CP1500 zu verifizieren.
 
 # IPP-Job-Status (RFC 8011, Abschnitt 5.3.7)
 _JOB_STATES = {
@@ -207,15 +202,16 @@ class Printer:
 
         logger.info(
             "Sende Druckauftrag: Warteschlange='%s', Geräte-URI='%s', "
-            "Drucker-Status=%s, Datei='%s', Optionen=%s",
+            "Drucker-Status=%s, Datei='%s', ohne Job-Optionen "
+            "(Queue-Standards gelten, z. B. StpBorderless=True)",
             target,
             self._target_info.get("device-uri", "?"),
             self._target_info.get("printer-state", "?"),
-            path, _PRINT_OPTIONS,
+            path,
         )
         try:
-            job_id = self._conn.printFile(target, str(path), "Fotobox",
-                                          dict(_PRINT_OPTIONS))
+            # Bewusst ohne Optionen ({}) – siehe Kommentar am Modulanfang.
+            job_id = self._conn.printFile(target, str(path), "Fotobox", {})
         except cups.IPPError as e:
             logger.error(
                 "Druckfehler (CUPS IPP %s): %s. "

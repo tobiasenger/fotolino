@@ -315,6 +315,10 @@ sudo lpadmin -p SELPHY -E \
   -v "gutenprint53+usb://canon-selphy-cp1500/DEINE-SERIENNUMMER" \
   -m "gutenprint.5.3://canon-cp1500/expert"
 
+# Randlosdruck als Queue-Standard – die App übergibt beim Drucken
+# bewusst KEINE Optionen, daher muss das hier konfiguriert werden:
+sudo lpadmin -p SELPHY -o StpBorderless=True
+
 sudo lpadmin -p SELPHY -o media-default=Postcard
 sudo lpoptions -d SELPHY
 ```
@@ -322,7 +326,12 @@ sudo lpoptions -d SELPHY
 - Der Name `SELPHY` muss zur App-Einstellung `printer_name` passen
   (Standard ist `SELPHY` – wer nichts ändert, muss nichts anpassen).
 - Die Treiber-Variante `expert` ist Pflicht: Nur sie bietet die
-  Randlos-Optionen, die die App beim Drucken setzt.
+  Randlos-Option `StpBorderless`, die hier als Queue-Standard gesetzt wird.
+- Die App sendet Druckaufträge **ohne eigene Druckoptionen** – app-seitige
+  Optionen (`media`, `fit-to-page`, `print-scaling` …) verursachten beim
+  CP1500 hängende bzw. fehlerhafte Drucke. Randlosdruck und Papierformat
+  gehören deshalb als Standardwerte in die CUPS-Queue (Details:
+  `PRINTER_SETUP.md`, Abschnitt „Druckoptionen der Fotobox").
 
 ### 6.4 Testdruck
 
@@ -330,7 +339,9 @@ Papier- und Farbkassette müssen eingelegt sein:
 
 ```bash
 lpstat -p SELPHY
-lp -d SELPHY -o PageSize=Postcard -o fit-to-page /usr/share/cups/data/testprint
+# Bewusst OHNE -o-Optionen – genau wie die Fotobox druckt
+# (Randlosdruck/Papierformat sind Queue-Standards aus Schritt 6.3):
+lp -d SELPHY /usr/share/cups/data/testprint
 ```
 
 ✅ **Kontrollpunkt:** `lpstat` meldet „… ist im Leerlauf" und der Drucker

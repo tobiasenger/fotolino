@@ -38,6 +38,11 @@ def _default_settings() -> dict:
         },
         "collage_covers": {"1": "", "2": "", "3": "", "4": ""},
         "idle_background": {"type": "image", "file": ""},
+        "screen_overlays": {
+            "start": {"enabled": True, "file": ""},
+            "collage": {"enabled": True, "file": ""},
+            "print": {"enabled": True, "file": ""},
+        },
         "loading_bar_color": "#FF6600",
         "flash_enabled": True,
         "printer_name": "SELPHY",

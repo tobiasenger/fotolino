@@ -159,6 +159,10 @@ sudo lpadmin -p SELPHY -E \
   -v "gutenprint53+usb://canon-selphy-cp1500/CZ23011023417958" \
   -m "gutenprint.5.3://canon-cp1500/expert"
 
+# Randlosdruck als Queue-Standard setzen – die App übergibt KEINE
+# Druckoptionen, daher muss das hier (einmalig) konfiguriert werden:
+sudo lpadmin -p SELPHY -o StpBorderless=True
+
 # Papiergröße als Standard setzen und als Standarddrucker markieren:
 sudo lpadmin -p SELPHY -o media-default=Postcard
 sudo lpoptions -d SELPHY
@@ -168,18 +172,26 @@ sudo lpoptions -d SELPHY
 - `-E` – Warteschlange aktivieren und Aufträge annehmen
 - `-v` – die `gutenprint53+usb://`-URI aus `lpinfo -v` (ohne `direct`!)
 - `-m` – der Gutenprint-5.3.5-Treiber aus `lpinfo -m | grep -i cp1500`
-  (Variante `expert` verwenden – sie stellt die Randlos-Optionen bereit,
-  die die Fotobox setzt)
+  (Variante `expert` verwenden – sie stellt die Randlos-Option
+  `StpBorderless` bereit, die hier als Queue-Standard gesetzt wird)
+- `-o StpBorderless=True` – randloser Druck als **Standardwert der
+  Warteschlange**. Die Fotobox sendet Aufträge bewusst ohne eigene
+  Druckoptionen (Begründung: Abschnitt „Druckoptionen der Fotobox"),
+  deshalb gehört diese Einstellung in die Queue, nicht in die App.
 
-### 4.3 Verfügbare Druckoptionen prüfen
+### 4.3 Queue-Standards prüfen
 
 ```bash
-lpoptions -p SELPHY -l | grep -i pagesize
+lpoptions -p SELPHY -l | grep -iE "pagesize|borderless"
 # Beispiel: PageSize/Page Size: *Postcard w253h337 w155h244 ...
+#           StpBorderless/Borderless: False *True
 ```
 
-`Postcard` (100×148 mm) ist das richtige Format für das KP-108IN-Papier
-und genau das, was die Fotobox in `src/printer.py` anfordert.
+Der Stern markiert den jeweils aktiven Standardwert: `Postcard`
+(100×148 mm, KP-108IN-Papier) und `StpBorderless=True` müssen markiert
+sein. Diese Queue-Standards sind die einzige Stelle, an der Papierformat
+und Randlosdruck konfiguriert werden – die Fotobox selbst übergibt beim
+Drucken keine Optionen (siehe Abschnitt „Druckoptionen der Fotobox").
 
 ---
 
@@ -189,8 +201,9 @@ und genau das, was die Fotobox in `src/printer.py` anfordert.
 # Ist die Warteschlange da und bereit? (Soll: "… ist im Leerlauf")
 lpstat -p SELPHY
 
-# Testdruck (Papier + Farbkassette einlegen!):
-lp -d SELPHY -o PageSize=Postcard -o fit-to-page /usr/share/cups/data/testprint
+# Testdruck (Papier + Farbkassette einlegen!) – bewusst OHNE -o-Optionen,
+# genau wie die Fotobox druckt; die Queue-Standards aus 4.2 gelten:
+lp -d SELPHY /usr/share/cups/data/testprint
 ```
 
 > Falls der Testdruck mit „Waiting for printer to become available" hängt:
@@ -205,21 +218,55 @@ da sie vor jedem Druck neu sucht.
 
 ### Druckoptionen der Fotobox
 
-`src/printer.py` sendet jeden Auftrag mit diesen Optionen (Werte aus dem
-Gutenprint-Expert-PPD des CP1500):
+**Die App übergibt bewusst keinerlei Druckoptionen an CUPS** – der Aufruf
+in `src/printer.py` lautet:
 
-| Option | Wert | Bedeutung |
-|---|---|---|
-| `PageSize` | `Postcard` | 100×148 mm (KP-108IN-Papier) |
-| `StpBorderless` | `True` | randlos drucken |
-| `StpiShrinkOutput` | `Expand` | Bild auf die volle Seite aufziehen |
-| `StpImageType` | `Photo` | Farbabstimmung für Fotos |
-| `fit-to-page` | `true` | JPEG per CUPS-Filter auf die Seite skalieren |
+```python
+job_id = self._conn.printFile(target, str(path), "Fotobox", {})
+```
 
-Die App protokolliert vor jedem Druck Warteschlange, Geräte-URI, Datei und
-Optionen und prüft nach dem Absenden kurz den Job-Status – verworfene
-Aufträge werden als Fehler gemeldet, hängende Aufträge mit der
-CUPS-Druckermeldung ins Log geschrieben.
+**Warum keine app-seitigen Optionen?** Nach ausgiebiger Fehlersuche stellte
+sich heraus, dass vom Programm mitgesendete Druckoptionen (`media`,
+`fit-to-page`, `print-scaling`, PPD-Optionen wie `StpBorderless` …) die
+Ursache für unzuverlässiges Druckverhalten waren: CUPS nahm die Aufträge
+an, sie blieben aber teils hängen oder druckten nicht korrekt – obwohl
+Drucker, USB-Verbindung, CUPS, pycups und der Gutenprint-Treiber
+nachweislich einwandfrei funktionierten. Ohne Job-Optionen druckt der
+CP1500 stabil.
+
+**Wo wird dann der Randlosdruck konfiguriert?** Ohne Job-Optionen gelten
+die **Standardwerte der CUPS-Warteschlange** (PPD-Defaults plus per
+`lpadmin -o` gesetzte Queue-Defaults). Randloser Druck wird deshalb
+einmalig in der Queue hinterlegt – getestet und mit dem gewünschten
+randlosen Ergebnis:
+
+```bash
+sudo lpadmin -p SELPHY -o StpBorderless=True
+```
+
+**Bekannt-gute Referenzkonfiguration** (verifiziert nach ausgiebiger
+Fehlersuche – aktueller Stand):
+
+| Komponente | Stand |
+|---|---|
+| Drucker | Canon SELPHY CP1500 |
+| Betriebssystem | Raspberry Pi OS Trixie (Debian 13) |
+| Druckdienst | CUPS |
+| Treiber | Gutenprint 5.3.5 (aus den Quellen, Abschnitt 3) |
+| Verbindung | USB, Backend `gutenprint53+usb://` (Abschnitt 4) |
+| Queue-Standards | `StpBorderless=True`, `media-default=Postcard` |
+| App-Druckaufruf | `printFile(…, {})` – **ohne** Job-Optionen |
+
+> **Wichtig – Stabilität geht vor:** Keine neuen Druck-, Medien- oder
+> Skalierungsoptionen einführen (weder im Code noch als zusätzliche
+> Job-Optionen), sofern es dafür keinen starken, dokumentierten Grund gibt
+> und die Änderung gründlich auf dem CP1500 getestet wurde. Die obige
+> Konfiguration ist die stabile Referenz und soll erhalten bleiben.
+
+Die App protokolliert vor jedem Druck Warteschlange, Geräte-URI und Datei
+und prüft nach dem Absenden kurz den Job-Status – verworfene Aufträge
+werden als Fehler gemeldet, hängende Aufträge mit der CUPS-Druckermeldung
+ins Log geschrieben.
 
 ---
 
@@ -274,7 +321,8 @@ sudo tail -n 50 /var/log/cups/error_log
 | Drucker druckt, fällt dann aus | `vcgencmd get_throttled` prüfen (Unterspannung), `ipp-usb` entfernen |
 | `lpadmin: … nicht erlaubt` | Benutzer nicht in Gruppe `lpadmin` → Abschnitt 2 |
 | Python-Log: „pycups not available" | `sudo apt install python3-cups` |
-| Druck mit weißem Rand | Queue mit `expert`-PPD anlegen (Abschnitt 4.2); App setzt `StpBorderless=True` |
+| Druck mit weißem Rand | Randlosdruck als Queue-Standard setzen: `sudo lpadmin -p SELPHY -o StpBorderless=True` (braucht das `expert`-PPD, Abschnitt 4.2). Die App setzt **keine** eigenen Druckoptionen |
+| Druckaufträge hängen/fehlerhaft, obwohl Hardware/Treiber in Ordnung | Werden app-/job-seitig Druckoptionen mitgesendet (`media`, `fit-to-page`, `print-scaling` …)? Entfernen – ohne Job-Optionen drucken (siehe „Druckoptionen der Fotobox") |
 
 ---
 

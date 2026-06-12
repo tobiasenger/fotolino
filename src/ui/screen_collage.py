@@ -15,14 +15,13 @@ import logging
 import threading
 import time
 
-from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtWidgets import QProgressBar
 
-from ..constants import FONT_MEDIUM, MEDIA_PANEL_RECT, SCENE_DURATION_DEFAULTS
+from ..constants import MEDIA_PANEL_RECT, SCENE_DURATION_DEFAULTS
 from . import theme
 from .base_screen import BaseScreen
-from .widgets import draw_shadow_text
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +80,7 @@ class CollageScreen(BaseScreen):
         else:
             self._set_background(None)
         self._slide_dur = self._duration / max(1, len(self._slide_pixmaps))
+        self._apply_screen_overlay("collage")
         self._start_scene_music(self._scene)
 
         self._progress.setStyleSheet(theme.progress_bar_style(
@@ -133,17 +133,11 @@ class CollageScreen(BaseScreen):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        w, h = self.width(), self.height()
-
         self._paint_background(painter)
         if self._slide_pixmaps:
             self._draw_cover_in_rect(painter, self._slide_pixmaps[self._slide_idx],
                                      self._design_rect(*MEDIA_PANEL_RECT))
-        else:
-            # No photos – edge case
-            draw_shadow_text(painter, 0, -80, w, h, "Collage wird erstellt…",
-                             FONT_MEDIUM, (255, 255, 255),
-                             align=Qt.AlignmentFlag.AlignCenter, offset=3)
+        self._paint_overlay(painter)
         painter.end()
 
     # ------------------------------------------------------------------

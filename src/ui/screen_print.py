@@ -13,18 +13,15 @@ import threading
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtWidgets import QProgressBar
 
-from ..constants import FONT_SMALL, MEDIA_PANEL_RECT, SCENE_DURATION_DEFAULTS
+from ..constants import MEDIA_PANEL_RECT, SCENE_DURATION_DEFAULTS
 from . import theme
 from .base_screen import BaseScreen
-from .widgets import draw_shadow_text
 
 logger = logging.getLogger(__name__)
-
-STATUS_TEXT = "Dein Foto wird gedruckt…"
 
 
 class PrintScreen(BaseScreen):
@@ -61,6 +58,7 @@ class PrintScreen(BaseScreen):
             self._set_background(self._load_pixmap(self._scene.get("image", "")))
         else:
             self._set_background(None)
+        self._apply_screen_overlay("print")
         self._start_scene_music(self._scene)
 
         self._progress.setStyleSheet(theme.progress_bar_style(
@@ -98,18 +96,11 @@ class PrintScreen(BaseScreen):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        w = self.width()
-
         self._paint_background(painter)
-
         if self._collage_pixmap:
             self._draw_cover_in_rect(painter, self._collage_pixmap,
                                      self._design_rect(*MEDIA_PANEL_RECT))
-
-        # Keep the status text above the full-width bar at the bottom edge.
-        draw_shadow_text(painter, 0, self._progress.y() - 56, w, 40, STATUS_TEXT,
-                         FONT_SMALL, (230, 230, 230),
-                         align=Qt.AlignmentFlag.AlignHCenter)
+        self._paint_overlay(painter)
         painter.end()
 
     # ------------------------------------------------------------------

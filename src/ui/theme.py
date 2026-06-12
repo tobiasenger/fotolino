@@ -32,10 +32,10 @@ LARGE_BTN_STYLE = (
 
 
 def progress_bar_style(color: str) -> str:
+    # Borderless: the bar is only a few pixels tall (constants.PROGRESS_BAR_H).
     return (
-        "QProgressBar { border: 2px solid #333; border-radius: 5px; "
-        "background: #282828; height: 24px; } "
-        f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
+        "QProgressBar { border: none; background: #282828; } "
+        f"QProgressBar::chunk {{ background: {color}; }}"
     )
 
 

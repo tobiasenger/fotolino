@@ -164,6 +164,13 @@ geloggt).
 Ausführliche Einrichtung: **PRINTER_SETUP.md** · Reparatur einer hängenden
 Queue: **PRINTER_FIX.md**
 
+> **Bekannt-gute Konfiguration:** Die App sendet Druckaufträge **ohne
+> Job-Optionen** (`printFile(…, {})`) – app-seitige Optionen (`media`,
+> `fit-to-page`, `print-scaling` …) verursachten beim CP1500 hängende bzw.
+> fehlerhafte Drucke. Randlosdruck ist als Queue-Standard hinterlegt
+> (`sudo lpadmin -p SELPHY -o StpBorderless=True`). Details:
+> PRINTER_SETUP.md, Abschnitt „Druckoptionen der Fotobox".
+
 ### Verbindung & Einrichtung
 
 | Meldung | Level | Bedeutung | Behebung |

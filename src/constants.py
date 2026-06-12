@@ -36,7 +36,7 @@ COLLAGE_LAYOUTS = {
 MEDIA_PANEL_RECT = (465, 160, 990, 660)
 
 # Progress bar: full screen width, flush with the bottom edge (design height).
-PROGRESS_BAR_H = 100
+PROGRESS_BAR_H = 8
 
 # Base background color used when a screen has no background image
 COLOR_BG = (10, 10, 20)

@@ -9,6 +9,16 @@ Das Werkzeug ist **vollständig unabhängig von der Fotobox-App**: eigener Code,
 eigene Logs, eigene Reports. Es ändert nichts an der CUPS-Konfiguration
 (Ausnahme: das ausdrücklich aufgerufene `unstick`).
 
+> **Ergebnis der Fehlersuche (bekannt-gute Konfiguration):** Die Ursache der
+> unzuverlässigen Drucke waren **job-seitig mitgesendete Druckoptionen**
+> (`media`, `fit-to-page`, `print-scaling`, …) – Hardware, USB, CUPS, pycups
+> und Gutenprint 5.3.5 waren in Ordnung. Die Fotobox druckt deshalb jetzt
+> **ohne Job-Optionen** (`printFile(…, {})`); randloser Druck ist als
+> Queue-Standard hinterlegt: `sudo lpadmin -p SELPHY -o StpBorderless=True`.
+> Details: `../PRINTER_SETUP.md`, Abschnitt „Druckoptionen der Fotobox".
+> Dieses Werkzeug bleibt für künftige Diagnosen erhalten – neue Optionen nur
+> nach gründlichem Test auf dem CP1500 einführen.
+
 **Grundprinzip:** Es wird nichts über den CP1500 fest verdrahtet. Alle
 Seitengrößen, Randlos- und Skalierungsoptionen werden zur Laufzeit aus der
 PPD der CUPS-Warteschlange und per IPP vom Server gelesen — also genau das,
